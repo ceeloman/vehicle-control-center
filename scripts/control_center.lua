@@ -147,59 +147,45 @@ end
 
 function control_center.create_locator_arrow(player, vehicle_unit_number, surface_index)
     if not player or not player.valid then return end
-
     local vehicle = find_vehicle_by_unit_number(vehicle_unit_number, surface_index)
     if not vehicle or not vehicle.valid then
-        --player.print({"vcc-gui.vehicle-not-found"})
         return
     end
-
     if vehicle.surface.index ~= player.surface.index then
-        --player.print("Vehicle not on this surface")
         return
     end
-
-    if storage.vcc.players[player.index] and storage.vcc.players[player.index].locator_id then
-        local locator_id = storage.vcc.players[player.index].locator_id
-        rendering.clear("vehicle-control-center")
-        storage.vcc.players[player.index].locator_id = nil
-        storage.vcc.players[player.index].locator_vehicle_id = nil
+    local player_data = storage.vcc.players[player.index] or {}
+    storage.vcc.players[player.index] = player_data
+    if player_data.locator_id then
+        rendering.destroy(player_data.locator_id)
+        player_data.locator_id = nil
+        player_data.locator_vehicle_id = nil
     end
-
     local view_position = player.position
     local dx = vehicle.position.x - view_position.x
     local dy = vehicle.position.y - view_position.y
     local orientation = math.atan2(dy, dx) / (2 * math.pi)
     if orientation < 0 then orientation = orientation + 1 end
-
-    -- Offset by 1 tile in the direction of the vehicle
     local offset_distance = 3
     local offset_position = {
         x = view_position.x + offset_distance * math.cos(orientation * 2 * math.pi),
         y = view_position.y + offset_distance * math.sin(orientation * 2 * math.pi)
     }
-
-    -- Rotate sprite 90 degrees clockwise (add 0.25 to orientation)
     local sprite_orientation = (orientation + 0.25) % 1
-
     local arrow_id = rendering.draw_sprite{
         sprite = "utility/alert_arrow",
         target = offset_position,
         surface = player.surface,
-        players = {player.index},
+        players = {player},
         x_scale = 1.5,
         y_scale = 1.5,
         render_layer = "light-effect",
         orientation = sprite_orientation,
         time_to_live = 300
     }
-
-    storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
-    storage.vcc.players[player.index].locator_id = arrow_id
-    storage.vcc.players[player.index].locator_vehicle_id = vehicle_unit_number
-    storage.vcc.players[player.index].locator_timer = game.tick + 60 * 60
-
-    --player.print({"vcc-gui.locator-arrow-created"})
+    player_data.locator_id = arrow_id
+    player_data.locator_vehicle_id = vehicle_unit_number
+    player_data.locator_timer = game.tick + 300
 end
 
 -- Add to control_center.lua - New function for opening a vehicle's inventory GUI
@@ -736,6 +722,155 @@ local function add_buttons_to_vehicle_row(row, vehicle, button_flow)
     end
 end
 
+function control_center.create_hover_camera_gui(player, vehicle_data, button_position)
+    if player.gui.screen.vehicle_camera_frame then
+        player.gui.screen.vehicle_camera_frame.destroy()
+    end
+    
+    local camera_frame = player.gui.screen.add{
+        type = "frame",
+        name = "vehicle_camera_frame",
+        direction = "vertical"
+    }
+    
+    camera_frame.auto_center = false
+    local frame_location = button_position or {
+        x = 650,
+        y = math.floor(player.display_resolution.height / 2) - 150
+    }
+    frame_location.y = frame_location.y - 300 -- Bottom-left over button
+    camera_frame.location = frame_location
+    
+    local camera = camera_frame.add{
+        type = "camera",
+        name = "vehicle_camera",
+        position = vehicle_data.position,
+        zoom = 0.5,
+        surface_index = vehicle_data.surface_index
+    }
+    camera.entity = vehicle_data.entity
+    camera.style.minimal_width = 400
+    camera.style.minimal_height = 300
+    camera.style.vertically_stretchable = true
+    camera.style.horizontally_stretchable = true
+    
+    return camera_frame
+end
+
+function control_center.create_pinned_camera_gui(player, vehicle_data, button_position)
+    local unit_number = vehicle_data.entity.unit_number
+    local unit_number_str = tostring(unit_number)
+    if player.gui.screen["vehicle_camera_" .. unit_number_str] then
+        player.gui.screen["vehicle_camera_" .. unit_number_str].destroy()
+    end
+    local camera_frame = player.gui.screen.add{
+        type = "frame",
+        name = "vehicle_camera_" .. unit_number_str,
+        direction = "vertical",
+        tags = {is_collapsed = false}
+    }
+    camera_frame.auto_center = true
+    local title_flow = camera_frame.add{
+        type = "flow",
+        direction = "horizontal",
+        name = "title_flow"
+    }
+    local title_caption = vehicle_data.entity.entity_label and vehicle_data.entity.entity_label ~= ""
+        and {"", vehicle_data.entity.localised_name, ": ", get_display_name(vehicle_data)}
+        or vehicle_data.entity.localised_name
+    local title_label = title_flow.add{
+        type = "label",
+        caption = title_caption,
+        style = "frame_title"
+    }
+    title_label.drag_target = camera_frame
+    local drag_handle = title_flow.add{
+        type = "empty-widget",
+        style = "draggable_space_header"
+    }
+    drag_handle.style.horizontally_stretchable = true
+    drag_handle.style.height = 24
+    drag_handle.style.right_margin = 4
+    drag_handle.drag_target = camera_frame
+    local close_button = title_flow.add{
+        type = "sprite-button",
+        name = "close_pinned_camera",
+        sprite = "utility/close",
+        tooltip = {"gui.close"},
+        style = "frame_action_button",
+        tags = {action = "close_pinned_camera", unit_number = unit_number}
+    }
+    local camera = camera_frame.add{
+        type = "camera",
+        name = "vehicle_camera",
+        position = vehicle_data.position,
+        zoom = 0.5,
+        surface_index = vehicle_data.surface_index
+    }
+    camera.entity = vehicle_data.entity
+    camera.style.minimal_width = 400
+    camera.style.minimal_height = 300
+    camera.style.vertically_stretchable = true
+    camera.style.horizontally_stretchable = true
+    local button_flow = camera_frame.add{
+        type = "flow",
+        direction = "horizontal",
+        name = "button_flow"
+    }
+    button_flow.style.horizontal_align = "right"
+    button_flow.style.bottom_padding = 4
+    button_flow.style.right_margin = 4
+    local vehicle = {
+        entity = vehicle_data.entity,
+        name = vehicle_data.entity.name,
+        unit_number = vehicle_data.entity.unit_number,
+        surface = vehicle_data.entity.surface,
+        type = vehicle_data.entity.type
+    }
+    add_buttons_to_vehicle_row(camera_frame, vehicle, button_flow)
+    return camera_frame
+end
+
+function control_center.on_tick(event)
+    for _, player in pairs(game.players) do
+        if player.valid then
+            local player_data = storage.vcc.players[player.index]
+            if player_data and player_data.resizing_camera then
+                local unit_number = player_data.resizing_camera.unit_number
+                local unit_number_str = tostring(unit_number)
+                local frame = player.gui.screen["vehicle_camera_" .. unit_number_str]
+                if frame and frame.valid then
+                    local camera = frame.vehicle_camera
+                    local current_pos = player.cursor_position
+                    local start_pos = player_data.resizing_camera.start_position
+                    local start_width = player_data.resizing_camera.start_width
+                    local start_height = player_data.resizing_camera.start_height
+
+                    -- Calculate size change (pixels per tile, adjusted for display scale)
+                    local scale = player.display_scale
+                    local delta_x = (current_pos.x - start_pos.x) * 32 * scale
+                    local delta_y = (current_pos.y - start_pos.y) * 32 * scale
+
+                    -- Update size with minimum bounds
+                    local new_width = math.max(200, start_width + delta_x)
+                    local new_height = math.max(150, start_height + delta_y)
+                    camera.style.minimal_width = new_width
+                    camera.style.minimal_height = new_height
+
+                    -- Stop resizing on left mouse release
+                    if not player.is_cursor_empty() or not player.cursor_stack.valid then
+                        player_data.resizing_camera = nil
+                        player.print("Finished resizing camera for vehicle #" .. unit_number)
+                    end
+                else
+                    player_data.resizing_camera = nil
+                    player.print("Camera GUI not found, stopped resizing")
+                end
+            end
+        end
+    end
+end
+
 -- Create or update the control center GUI
 function control_center.create_gui(player, vehicle_type)
     vehicle_type = vehicle_type or "all"
@@ -746,30 +881,25 @@ function control_center.create_gui(player, vehicle_type)
     
     log_debug("Creating control center GUI for player: " .. player.name)
     
-    -- Create main frame
     local main_frame = player.gui.screen.add{
         type = "frame", 
         name = "vehicle_control_center", 
         direction = "vertical"
     }
-
     player.opened = main_frame
     
-    -- Position at left middle of screen
     main_frame.auto_center = false
     main_frame.location = {
         x = 50, 
         y = math.floor(player.display_resolution.height / 2) - 150
     }
     
-    -- Add title bar with drag handle and close button
     local title_flow = main_frame.add{
         type = "flow",
         direction = "horizontal",
         name = "title_flow"
     }
     
-    -- Add caption as label
     local title_label = title_flow.add{
         type = "label",
         caption = {"vcc.main-title"},
@@ -777,7 +907,6 @@ function control_center.create_gui(player, vehicle_type)
     }
     title_label.drag_target = main_frame
     
-    -- Add draggable space
     local drag_handle = title_flow.add{
         type = "empty-widget",
         style = "draggable_space_header"
@@ -785,21 +914,16 @@ function control_center.create_gui(player, vehicle_type)
     drag_handle.style.horizontally_stretchable = true
     drag_handle.style.height = 24
     drag_handle.style.right_margin = 4
-    drag_handle.ignored_by_interaction = false
     drag_handle.drag_target = main_frame
     
-    -- Add close button
     local close_button = title_flow.add{
         type = "sprite-button",
         name = "close_vehicle_control_center",
         sprite = "utility/close",
-        hovered_sprite = "utility/close_black",
-        clicked_sprite = "utility/close_black",
         tooltip = {"gui.close"},
         style = "frame_action_button"
     }
     
-    -- Main content container
     local main_content = main_frame.add{
         type = "flow", 
         direction = "vertical",
@@ -807,23 +931,13 @@ function control_center.create_gui(player, vehicle_type)
     }
     main_content.style.padding = {4, 4}
     
-    -- Determine which surface to use
-    -- Always use the player's current surface
     local current_surface = player.surface
     local current_surface_index = current_surface.index
     log_debug("Using player's current surface index: " .. current_surface_index)
     
-    -- Get vehicles from the current surface
-    local vehicles = {}
-    if current_surface then
-        vehicles = get_valid_vehicles_on_surface(current_surface, player.force, vehicle_type or "all")
-        log_debug("Found " .. #vehicles .. " vehicles on surface " .. current_surface.name)
-    end
-    
-    -- Get all surfaces with vehicles
+    local vehicles = get_valid_vehicles_on_surface(current_surface, player.force, vehicle_type or "all")
     local surfaces_data = collect_surfaces_with_vehicles(player.force, vehicle_type)
     
-    -- Add vehicle type selector section
     local vehicle_selector_flow = main_content.add{
         type = "flow",
         direction = "horizontal",
@@ -832,61 +946,45 @@ function control_center.create_gui(player, vehicle_type)
     vehicle_selector_flow.style.vertical_align = "center"
     vehicle_selector_flow.style.margin = {0, 0, 8, 0}
     
-    -- Vehicle type label
     local vehicle_label = vehicle_selector_flow.add{
         type = "label",
         caption = {"vcc.vehicle-type"}
     }
     vehicle_label.style.minimal_width = 100
     
-    -- Create tab buttons with entity icons
-    -- Spider vehicle tab (using spidertron icon)
     local spider_tab = vehicle_selector_flow.add{
         type = "sprite-button",
         name = "tab_spider",
         sprite = "entity/spidertron",
         tooltip = {"vcc.filter-spidertrons"},
-        tags = {
-            action = "select_tab",
-            vehicle_type = "spider-vehicle"
-        }
+        tags = {action = "select_tab", vehicle_type = "spider-vehicle"}
     }
     spider_tab.style.size = 40
     
-    -- Car tab (using car icon)
     local car_tab = vehicle_selector_flow.add{
         type = "sprite-button",
         name = "tab_car",
         sprite = "entity/car",
         tooltip = {"vcc.filter-cars"},
-        tags = {
-            action = "select_tab",
-            vehicle_type = "car"
-        }
+        tags = {action = "select_tab", vehicle_type = "car"}
     }
     car_tab.style.size = 40
     
-    -- Locomotive tab (using locomotive icon)
     local locomotive_tab = vehicle_selector_flow.add{
         type = "sprite-button",
         name = "tab_locomotive",
         sprite = "entity/locomotive",
         tooltip = {"vcc.filter-locomotives"},
-        tags = {
-            action = "select_tab",
-            vehicle_type = "locomotive"
-        }
+        tags = {action = "select_tab", vehicle_type = "locomotive"}
     }
     locomotive_tab.style.size = 40
     
-    -- Highlight the currently selected tab
     spider_tab.enabled = vehicle_type ~= "spider-vehicle"
     car_tab.enabled = vehicle_type ~= "car"
     locomotive_tab.enabled = vehicle_type ~= "locomotive"
 
     if space_age_installed or #game.surfaces > 1 then
-        -- Surface selector section
-        surface_selector_flow = main_content.add{
+        local surface_selector_flow = main_content.add{
             type = "flow",
             direction = "horizontal",
             name = "surface_selector_flow"
@@ -894,33 +992,27 @@ function control_center.create_gui(player, vehicle_type)
         surface_selector_flow.style.vertical_align = "center"
         surface_selector_flow.style.margin = {0, 0, 8, 0}
 
-        -- Surface label
-        surface_label = surface_selector_flow.add{
+        local surface_label = surface_selector_flow.add{
             type = "label",
             caption = {"vcc.current-surface"}
         }
         surface_label.style.minimal_width = 100
 
-        -- Add planet buttons flow
-        planet_buttons_flow = surface_selector_flow.add{
+        local planet_buttons_flow = surface_selector_flow.add{
             type = "flow",
             name = "planet_buttons_flow",
             direction = "horizontal"
         }
         planet_buttons_flow.style.vertical_align = "center"
 
-        -- Find current surface in the surfaces_data or use player's current surface
         local current_surface_data = nil
-        local current_surface = game.surfaces[current_surface_index]
-        
         for _, data in ipairs(surfaces_data) do
             if data.surface.index == current_surface_index then
                 current_surface_data = data
                 break
             end
         end
-        
-        -- If the current surface doesn't have vehicles, we still need surface information
+
         if not current_surface_data and current_surface then
             current_surface_data = {
                 surface = current_surface,
@@ -928,102 +1020,63 @@ function control_center.create_gui(player, vehicle_type)
                 vehicles = {}
             }
         elseif not current_surface_data and #surfaces_data > 0 then
-            -- If current surface not found and no active surface, default to first one
             current_surface_data = surfaces_data[1]
             current_surface_index = current_surface_data.surface.index
             log_debug("Current surface has no vehicles, defaulting to: " .. current_surface_data.surface.name)
         end
-        
-        -- Add all planet buttons (always show at least the current planet)
+
+        local known_planets = {
+            ["nauvis"] = "vcc-planet-nauvis",
+            ["aquilo"] = "vcc-planet-aquilo",
+            ["fulgora"] = "vcc-planet-fulgora",
+            ["gleba"] = "vcc-planet-gleba",
+            ["vulcanus"] = "vcc-planet-vulcanus"
+        }
+
         local added_surfaces = {}
-        
-        -- First add the current surface if it exists
         if current_surface and not added_surfaces[current_surface.index] then
             local planet_name = format_surface_name(current_surface.name).name:lower()
-            local sprite_name
-            
-            -- Known planets that we created sprites for
-            local known_planets = {
-                ["nauvis"] = true,
-                ["aquilo"] = true, 
-                ["fulgora"] = true,
-                ["gleba"] = true,
-                ["vulcanus"] = true
-            }
-            
-            -- Try to use our custom planet sprite if it's a known planet
-            if known_planets[planet_name] then
-                sprite_name = "vcc-planet-" .. planet_name
-            else
-                -- For unknown planets, use first letter
+            local sprite_name = known_planets[planet_name]
+            if not sprite_name then
                 local first_letter = string.sub(planet_name, 1, 1):upper()
                 sprite_name = "virtual-signal/signal-" .. first_letter
             end
-            
-            -- Create planet button for current surface
-            planet_button = planet_buttons_flow.add{
+
+            local planet_button = planet_buttons_flow.add{
                 type = "sprite-button",
                 sprite = sprite_name,
                 tooltip = format_surface_name(current_surface.name).display_name,
-                toggled = true,  -- Current surface is always selected
-                tags = {
-                    action = "quick_select_surface",
-                    surface_index = current_surface.index
-                }
+                toggled = true,
+                tags = {action = "quick_select_surface", surface_index = current_surface.index}
             }
-            planet_button.style.size = 32  -- Adjust size to match sprite
+            planet_button.style.size = 32
             planet_button.style.margin = 1
-            
-            -- Mark this surface as added
             added_surfaces[current_surface.index] = true
         end
-        
-        -- Now add all other surfaces with vehicles
+
         for _, data in ipairs(surfaces_data) do
-            -- Only add each surface once
             if not added_surfaces[data.surface.index] then
                 local planet_name = data.surface_info.name:lower()
-                local sprite_name
-                
-                -- Known planets that we created sprites for
-                local known_planets = {
-                    ["nauvis"] = true,
-                    ["aquilo"] = true, 
-                    ["fulgora"] = true,
-                    ["gleba"] = true,
-                    ["vulcanus"] = true
-                }
-                
-                -- Try to use our custom planet sprite if it's a known planet
-                if known_planets[planet_name] then
-                    sprite_name = "vcc-planet-" .. planet_name
-                else
-                    -- For unknown planets, use first letter
+                local sprite_name = known_planets[planet_name]
+                if not sprite_name then
                     local first_letter = string.sub(planet_name, 1, 1):upper()
                     sprite_name = "virtual-signal/signal-" .. first_letter
                 end
-                
-                -- Create planet button
+
                 local planet_button = planet_buttons_flow.add{
                     type = "sprite-button",
                     sprite = sprite_name,
                     tooltip = data.surface_info.display_name,
-                    toggled = data.surface.index == current_surface_index,  -- Toggle on for selected planet
-                    tags = {
-                        action = "quick_select_surface",
-                        surface_index = data.surface.index
-                    }
+                    toggled = data.surface.index == current_surface_index,
+                    tags = {action = "quick_select_surface", surface_index = data.surface.index}
                 }
-                planet_button.style.size = 32  -- Adjust size to match sprite
+                planet_button.style.size = 32
                 planet_button.style.margin = 1
-                
-                -- Mark this surface as added
                 added_surfaces[data.surface.index] = true
             end
         end
 
-        if next(added_surfaces, next(added_surfaces)) then  -- Check if there are at least 2 surfaces
-            -- Add spacer to push the dropdown button to the right
+        if next(added_surfaces, next(added_surfaces)) then
             local spacer = planet_buttons_flow.add{
                 type = "empty-widget",
                 style = "draggable_space"
@@ -1031,21 +1084,18 @@ function control_center.create_gui(player, vehicle_type)
             spacer.style.horizontally_stretchable = true
             spacer.style.minimal_width = 10
             spacer.style.natural_height = 30
-        
-            -- Add dropdown arrow button at the end (right side)
+
             local dropdown_button = planet_buttons_flow.add{
                 type = "sprite-button",
                 sprite = "utility/dropdown",
                 tooltip = {"vcc.more-surfaces"},
-                tags = {
-                    action = "surface_selector"
-                }
+                tags = {action = "surface_selector"}
             }
             dropdown_button.style.size = 28
             dropdown_button.style.margin = 1
         end
-    end 
-    -- Store current surface index in the main frame tags
+    end
+    
     main_frame.tags = {
         current_surface_index = current_surface_index,
         vehicle_type = vehicle_type,
@@ -1053,13 +1103,8 @@ function control_center.create_gui(player, vehicle_type)
         vehicle_filters = {}
     }
 
-    -- Add a horizontal line to separate planet filters from entity filters
-    main_content.add{
-        type = "line",
-        direction = "horizontal"
-    }
+    main_content.add{type = "line", direction = "horizontal"}
 
-    -- Add entity filter section
     local entity_filter_flow = main_content.add{
         type = "flow",
         direction = "horizontal",
@@ -1068,24 +1113,21 @@ function control_center.create_gui(player, vehicle_type)
     entity_filter_flow.style.vertical_align = "center"
     entity_filter_flow.style.margin = {4, 0, 4, 0}
 
-    -- Label for entity filters
     local filter_label = entity_filter_flow.add{
         type = "label",
         caption = {"vcc.filter-vehicles"}
     }
     filter_label.style.minimal_width = 100
 
-    -- Collect all unique vehicle types across all surfaces for the selected vehicle type
     local vehicle_types = {}
     for _, data in ipairs(surfaces_data) do
         for _, vehicle in ipairs(data.vehicles) do
-            -- Only include vehicles matching the current type filter
             if vehicle_type == "all" or vehicle.type == vehicle_type then
                 if not vehicle_types[vehicle.name] then
                     vehicle_types[vehicle.name] = {
                         name = vehicle.name,
                         count = 1,
-                        enabled = true  -- Default to showing all types
+                        enabled = true
                     }
                 else
                     vehicle_types[vehicle.name].count = vehicle_types[vehicle.name].count + 1
@@ -1094,45 +1136,29 @@ function control_center.create_gui(player, vehicle_type)
         end
     end
 
-    -- Update the main frame tags to include vehicle filters
     main_frame.tags.vehicle_filters = vehicle_types
 
-    -- Add filter buttons for each vehicle type
     for name, info in pairs(vehicle_types) do
-        -- Check if we have saved filter settings
-        local is_enabled = true -- Default state
-        if storage.vcc.vehicle_filters and 
-           storage.vcc.vehicle_filters[player.index] and
-           storage.vcc.vehicle_filters[player.index][name] ~= nil then
-            is_enabled = storage.vcc.vehicle_filters[player.index][name]
-        end
-        
-        -- Update the vehicle_types entry
+        local is_enabled = storage.vcc.vehicle_filters and 
+                          storage.vcc.vehicle_filters[player.index] and
+                          storage.vcc.vehicle_filters[player.index][name] ~= nil and
+                          storage.vcc.vehicle_filters[player.index][name] or true
         vehicle_types[name].enabled = is_enabled
         
-        -- Use prototype icon if possible
         local vehicle_button = entity_filter_flow.add{
             type = "sprite-button",
             name = "filter_" .. name,
             sprite = "entity/" .. name,
             tooltip = {"entity-name." .. name}, 
-            toggled = is_enabled,  -- Use saved state
-            tags = {
-                action = "toggle_vehicle_filter",
-                vehicle_name = name
-            }
+            toggled = is_enabled,
+            tags = {action = "toggle_vehicle_filter", vehicle_name = name}
         }
         vehicle_button.style.size = 28
         vehicle_button.style.margin = 1
     end
 
-    -- Add horizontal separator before vehicle list
-    main_content.add{
-        type = "line",
-        direction = "horizontal"
-    }
+    main_content.add{type = "line", direction = "horizontal"}
     
-    -- Create scroll pane for vehicles
     local vehicle_list = main_content.add{
         type = "scroll-pane",
         name = "vehicle_list",
@@ -1142,29 +1168,12 @@ function control_center.create_gui(player, vehicle_type)
     vehicle_list.style.maximal_height = 300
     vehicle_list.style.minimal_width = 550
 
-    -- Populate the vehicle list if we have vehicle data
-    -- Get vehicles from the current surface
-    local vehicles = {}
-    if current_surface then
-        vehicles = get_valid_vehicles_on_surface(current_surface, player.force, vehicle_type or "all")
-        log_debug("Found " .. #vehicles .. " vehicles on surface " .. current_surface.name)
-    end
-
     local has_vehicles = false
-
-    -- Make sure vehicles exists before trying to iterate
     if vehicles and #vehicles > 0 then
         for _, vehicle in ipairs(vehicles) do
-            local show_vehicle = true
-            
-            -- Apply name filters if present
-            if filters and filters[vehicle.name] == false then
-                show_vehicle = false
-            end
-            
+            local show_vehicle = vehicle_types[vehicle.name] and vehicle_types[vehicle.name].enabled
             if show_vehicle then
                 has_vehicles = true
-                
                 local row = vehicle_list.add{
                     type = "flow", 
                     direction = "horizontal",
@@ -1174,15 +1183,24 @@ function control_center.create_gui(player, vehicle_type)
                 row.style.top_padding = 2
                 row.style.bottom_padding = 2
                 
-                -- Left side: icon and name
                 local entity_icon = row.add{
                     type = "sprite-button",
+                    name = "vehicle_icon_" .. vehicle.unit_number,
                     sprite = "entity/" .. vehicle.name,
-                    --enabled = false
+                    tooltip = {"vcc.view-vehicle-camera"},
+                    tags = {
+                        action = "open_vehicle_camera",
+                        unit_number = vehicle.unit_number,
+                        surface_index = vehicle.surface.index
+                    }
                 }
-                entity_icon.style.size = 28
+                entity_icon.style = "slot_button"
+                entity_icon.style.size = {32, 32} -- Reverted to original size
+                entity_icon.enabled = true
+                entity_icon.ignored_by_interaction = false
+                entity_icon.raise_hover_events = true
                 entity_icon.style.padding = 0
-                entity_icon.style.margin = 0
+                entity_icon.style.margin = 2
                 
                 local display_name = get_display_name(vehicle)
                 local name_label = row.add{
@@ -1191,17 +1209,14 @@ function control_center.create_gui(player, vehicle_type)
                 }
                 name_label.style.minimal_width = 176
                 
-                -- Add spacer to push buttons to the right
-                local spacer = row.add{
-                    type = "empty-widget"
-                }
+                local spacer = row.add{type = "empty-widget"}
                 spacer.style.horizontally_stretchable = true
                 spacer.style.minimal_width = 10
                 
-                -- Right side: buttons
                 local button_flow = row.add{
                     type = "flow",
-                    direction = "horizontal"
+                    direction = "horizontal",
+                    name = "button_flow"
                 }
                 button_flow.style.horizontal_align = "right"
                 
@@ -1210,22 +1225,15 @@ function control_center.create_gui(player, vehicle_type)
         end
     end
 
-    -- Show "no vehicles" message if none were displayed
     if not has_vehicles then
-        log_debug("No vehicles passed filters - showing empty message")
         vehicle_list.add{
-            type = "label",
-            caption = {"vcc.no-vehicles-of-type"}
-        }
+        type = "label",
+        caption = {"vcc.no-vehicles-of-type"}
+    }
     end
 
-    -- Add horizontal separator after vehicle list
-    main_content.add{
-        type = "line",
-        direction = "horizontal"
-    }
+    main_content.add{type = "line", direction = "horizontal"}
 
-    -- Add buttons at the bottom
     local button_flow = main_content.add{
         type = "flow", 
         direction = "horizontal"
@@ -1233,12 +1241,7 @@ function control_center.create_gui(player, vehicle_type)
     button_flow.style.horizontal_align = "center"
     button_flow.style.top_margin = 8
 
-    
-    -- Set player data
-    if not storage.vcc.players[player.index] then
-        storage.vcc.players[player.index] = {}
-    end
-    
+    storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
     storage.vcc.players[player.index].gui_open = true
     storage.vcc.players[player.index].current_surface_index = current_surface_index
     storage.vcc.players[player.index].vehicle_type = vehicle_type
@@ -1540,26 +1543,62 @@ end
 function control_center.close_gui(player)
     if not player or not player.valid then return end
     
-    -- Close map view if open
     local player_data = storage.vcc.players[player.index]
     if player_data and player_data.map_view_open then
         player.close_map()
         player_data.map_view_open = false
     end
     
-    -- Close dropdown if open
     if player.gui.screen.surface_selector_dropdown then
         player.gui.screen.surface_selector_dropdown.destroy()
     end
     
-    -- Close main frame
+    if player.gui.screen.vehicle_camera_frame then
+        player.gui.screen.vehicle_camera_frame.destroy()
+    end
+    
+    if player.gui.screen.vehicle_pinned_camera_frame then
+        player.gui.screen.vehicle_pinned_camera_frame.destroy()
+    end
+    
     if player.gui.screen.vehicle_control_center then
         player.gui.screen.vehicle_control_center.destroy()
     end
     
-    -- Update player data
     if player_data then
         player_data.gui_open = false
+        player_data.last_hovered_vehicle = nil
+        player_data.pinned_cameras = nil
+    end
+end
+
+function control_center.on_init()
+    storage.vcc = {
+        vehicles = {},
+        players = {},
+        vehicle_types = {}
+    }
+    for _, player in pairs(game.players) do
+        if player.valid then
+            storage.vcc.players[player.index] = {
+                gui_open = false,
+                selected_surface = player.surface.index,
+                pinned_cameras = {}
+            }
+        end
+    end
+end
+
+function control_center.on_load()
+    for _, player in pairs(game.players) do
+        if player.valid and not player.gui.screen.vehicle_pinned_camera_frame then
+            player.gui.screen.add{
+                type = "frame",
+                name = "vehicle_pinned_camera_frame",
+                direction = "vertical"
+            }.style.visible = false
+            log_debug("Restored vehicle_pinned_camera_frame for player " .. player.name)
+        end
     end
 end
 
@@ -1613,131 +1652,6 @@ function control_center.connect_to_vehicle(player, unit_number, surface_index)
         end
     else
         --player.print({"vcc-gui.neural-mod-not-installed"})
-    end
-end
-
--- Handle GUI click events
-function control_center.on_gui_click(event)
-    if not event.element or not event.element.valid then return end
-    
-    local player = game.get_player(event.player_index)
-    local element = event.element
-    
-    log_debug("GUI click on element: " .. element.name)
-    
-    -- Extract tags
-    local action = element.tags and element.tags.action
-    
-    -- Top button to open/close control center
-    if element.name == "vcc_button" then
-        control_center.toggle_gui(player)
-        return
-    end
-    
-    -- Close buttons
-    if element.name == "vcc_close_button" or element.name == "close_vehicle_control_center" then
-        control_center.close_gui(player)
-        return
-    end
-    
-    -- Refresh button
-    if element.name == "vcc_refresh_button" then
-        if scan_vehicles_function then
-            scan_vehicles_function()
-        end
-        
-        -- Refresh GUI with current settings
-        local main_frame = player.gui.screen.vehicle_control_center
-        if main_frame and main_frame.tags then
-            local vehicle_type = main_frame.tags.vehicle_type or "all"
-            control_center.create_gui(player, vehicle_type)
-        end
-        return
-    end
-    
-    -- Handle actions based on tags
-    if action then
-        -- Surface selector
--- Surface selection (from dropdown)
-        if action == "select_surface" then
-            local surface_index = element.tags.surface_index
-            
-            -- Store surface selection
-            storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
-            storage.vcc.players[player.index].current_surface_index = surface_index
-            
-            -- Close dropdown
-            if player.gui.screen.surface_selector_dropdown then
-                player.gui.screen.surface_selector_dropdown.destroy()
-            end
-            
-            -- Get current vehicle type and recreate GUI
-            local vehicle_type = storage.vcc.last_vehicle_type[player.index] or "all"
-            if player.gui.screen.vehicle_control_center then
-                if player.gui.screen.vehicle_control_center.tags then
-                    vehicle_type = player.gui.screen.vehicle_control_center.tags.vehicle_type or vehicle_type
-                end
-                player.gui.screen.vehicle_control_center.destroy()
-            end
-            
-            -- Recreate GUI with new surface
-            control_center.create_gui(player, vehicle_type)
-            return
-        end
-
-        -- Quick surface selection
-        if action == "quick_select_surface" then
-            local surface_index = element.tags.surface_index
-            control_center.update_surface_display(player, surface_index)
-            return
-        end
-
-        if event.element.name == "back_to_deployment_btn" then
-            -- Close the extras menu
-            if player.gui.screen["spidertron_extras_frame"] then
-                player.gui.screen["spidertron_extras_frame"].destroy()
-            end
-            
-            -- Retrieve stored vehicle data
-            local vehicle_data = storage.temp_deployment_data.vehicle
-            
-            -- Reopen the deployment menu with the same vehicles list
-            map_gui.show_deployment_menu(player, {vehicle_data})
-        end
-
-        -- Vehicle filter toggle
-        if action == "toggle_vehicle_filter" then
-            local vehicle_name = element.tags.vehicle_name
-            
-            -- Toggle and save filter state
-            storage.vcc.vehicle_filters = storage.vcc.vehicle_filters or {}
-            storage.vcc.vehicle_filters[player.index] = storage.vcc.vehicle_filters[player.index] or {}
-            
-            local current_state = storage.vcc.vehicle_filters[player.index][vehicle_name]
-            if current_state == nil then 
-                current_state = true -- Default to showing
-            end
-            
-            storage.vcc.vehicle_filters[player.index][vehicle_name] = not current_state
-            
-            -- Get current vehicle type and surface
-            local vehicle_type = storage.vcc.last_vehicle_type[player.index] or "all"
-            if player.gui.screen.vehicle_control_center then
-                if player.gui.screen.vehicle_control_center.tags then
-                    vehicle_type = player.gui.screen.vehicle_control_center.tags.vehicle_type or vehicle_type
-                end
-                player.gui.screen.vehicle_control_center.destroy()
-            end
-            
-            -- Recreate GUI with updated filters
-            control_center.create_gui(player, vehicle_type)
-            return
-        end
-    end
-    
-    -- Pass to control center
-    if control_center.on_gui_click then
-        control_center.on_gui_click(event)
     end
 end
 
