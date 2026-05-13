@@ -123,6 +123,67 @@ local function get_surface_sprite(surface_info)
     end
 end
 
+-- Grey out neural connect when NSC says the row cannot be used (e.g. real driver); allow orphan dummy in driver seat.
+local function vcc_should_disable_neural_connect_row(vehicle)
+    if not vehicle then
+        return true
+    end
+    local unit_number = vehicle.unit_number
+    local surface_index = vehicle.surface and vehicle.surface.index
+    if not unit_number or not surface_index then
+        return true
+    end
+    if script.active_mods["neural-spider-control"]
+        and remote.interfaces["neural-spider-control"]
+        and remote.interfaces["neural-spider-control"]["vcc_neural_connect_menu_enabled"] then
+        local ok, enabled = pcall(remote.call, "neural-spider-control", "vcc_neural_connect_menu_enabled", {
+            unit_number = unit_number,
+            surface_index = surface_index
+        })
+        if ok and type(enabled) == "boolean" then
+            return not enabled
+        end
+    end
+    if vehicle.get_driver and vehicle.get_driver() then
+        return true
+    end
+    return false
+end
+
+-- Disable "call spidertron" only when a real player character is in driver or passenger seat (NSC dummy does not count).
+local function vcc_should_disable_call_spidertron_row(vehicle)
+    if not vehicle or not vehicle.entity or not vehicle.entity.valid then
+        return true
+    end
+    local ent = vehicle.entity
+
+    local function seat_has_real_player(occupant)
+        if not occupant or not occupant.valid then
+            return false
+        end
+        if occupant.type ~= "character" then
+            return true
+        end
+        if script.active_mods["neural-spider-control"]
+            and remote.interfaces["neural-spider-control"]
+            and remote.interfaces["neural-spider-control"]["is_dummy_engineer"] then
+            local ok, is_dummy = pcall(remote.call, "neural-spider-control", "is_dummy_engineer", occupant)
+            if ok and is_dummy == true then
+                return false
+            end
+        end
+        return true
+    end
+
+    if seat_has_real_player(ent.get_driver and ent.get_driver()) then
+        return true
+    end
+    if seat_has_real_player(ent.get_passenger and ent.get_passenger()) then
+        return true
+    end
+    return false
+end
+
 local function add_neural_connect_button(vehicle_buttons_flow, vehicle)
     if script.active_mods["neural-spider-control"] then
         local connect_button = vehicle_buttons_flow.add{
@@ -137,8 +198,7 @@ local function add_neural_connect_button(vehicle_buttons_flow, vehicle)
         }
         connect_button.style.size = 28
         
-        -- Disable if vehicle is occupied
-        if vehicle.get_driver() then
+        if vcc_should_disable_neural_connect_row(vehicle) then
             connect_button.enabled = false
             connect_button.tooltip = {"vcc-gui.neural-connect-occupied"}
         end
@@ -225,90 +285,50 @@ function control_center.open_vehicle_inventory(player, vehicle_unit_number, surf
     storage.vcc.players[player.index].inventory_timer = game.tick + 5
 end
 
--- Add to control_center.lua - New function for getting a spidertron remote
+-- Give a linked spidertron remote (prefer cursor; if cursor is full, place in inventory then swap onto cursor)
 function control_center.get_spidertron_remote(player, spidertron_unit_number, surface_index)
     if not player or not player.valid then return end
 
     local spidertron = find_vehicle_by_unit_number(spidertron_unit_number, surface_index)
     if not spidertron or not spidertron.valid or spidertron.type ~= "spider-vehicle" then
-        --player.print({"vcc-gui.spidertron-not-found"})
         return
     end
 
-    local remote = player.cursor_stack
+    local cursor = player.cursor_stack
+    local inv = player.get_main_inventory()
+    local stack = nil
 
-    -- If cursor is occupied, find an empty inventory slot
-    if remote.valid_for_read then
-        remote = player.get_main_inventory().find_empty_stack()
-        if not remote then
-            --player.print({"vcc-gui.inventory-full"})
+    if not cursor.valid_for_read then
+        stack = cursor
+    else
+        stack = inv and inv.find_empty_stack()
+        if not stack then
             return
         end
     end
 
-    -- Set the remote item
-    local success, error = pcall(function()
-        remote.set_stack({name = "spidertron-remote", count = 1})
-    end)
-    if not success then
-        --player.print("Failed to create spidertron remote: " .. tostring(error))
+    if not pcall(function()
+        stack.set_stack({name = "spidertron-remote", count = 1})
+    end) then
         return
     end
 
-    -- Connect remote to spidertron (simulate player linking)
-    success, error = pcall(function()
-        player.opened = spidertron
-        player.cursor_stack.set_stack({name = "spidertron-remote", count = 1})
-        player.opened = nil
-    end)
-    if not success then
-        --player.print("Failed to connect remote to spidertron: " .. tostring(error))
-        return
+    if stack ~= cursor and cursor.valid_for_read then
+        pcall(function()
+            cursor.swap_stack(stack)
+        end)
     end
 
-    --player.print({"vcc-gui.remote-created", spidertron.prototype.localised_name})
-end
-
--- Add to control_center.lua - New function for calling a spidertron to player's location
-function control_center.get_spidertron_remote(player, spidertron_unit_number, surface_index)
-    if not player or not player.valid then return end
-
-    local spidertron = find_vehicle_by_unit_number(spidertron_unit_number, surface_index)
-    if not spidertron or not spidertron.valid or spidertron.type ~= "spider-vehicle" then
-        --player.print({"vcc-gui.spidertron-not-found"})
-        return
-    end
-
-    local remote = player.cursor_stack
-
-    -- If cursor is occupied, find an empty inventory slot
-    if remote.valid_for_read then
-        remote = player.get_main_inventory().find_empty_stack()
-        if not remote then
-            --player.print({"vcc-gui.inventory-full"})
-            return
-        end
-    end
-
-    -- Set the remote item
-    local success, error = pcall(function()
-        remote.set_stack({name = "spidertron-remote", count = 1})
-    end)
-    if not success then
-        ----player.print("Failed to create spidertron remote: " .. tostring(error))
-        return
-    end
-
-    -- Connect remote to spidertron
-    success, error = pcall(function()
+    local ok_sel = pcall(function()
         player.spidertron_remote_selection = {spidertron}
     end)
-    if not success then
-        ----player.print("Failed to connect remote to spidertron: " .. tostring(error))
-        return
+    if not ok_sel then
+        pcall(function()
+            player.opened = spidertron
+            player.cursor_stack.set_stack({name = "spidertron-remote", count = 1})
+            player.opened = nil
+        end)
     end
-
-    ----player.print({"vcc-gui.remote-created", spidertron.prototype.localised_name})
 end
 
 -- Function to follow a vehicle in map view
@@ -380,9 +400,22 @@ function control_center.call_spidertron_to_location(player, spidertron_unit_numb
         return
     end
 
+    -- In remote/map controller states player.position can be nil; fallback to physical position.
     local target_position = player.position
+    local target_surface = player.surface
+    if (not target_position or not target_position.x or not target_position.y) and player.physical_position then
+        target_position = player.physical_position
+        target_surface = player.physical_surface or target_surface
+    end
     if not target_position or not target_position.x or not target_position.y then
         --player.print("Invalid target position")
+        return
+    end
+    if not target_surface or not target_surface.valid then
+        return
+    end
+    if spidertron.surface.index ~= target_surface.index then
+        -- Do not issue cross-surface destinations.
         return
     end
 
@@ -610,7 +643,7 @@ local function add_buttons_to_vehicle_row(row, vehicle, button_flow)
     -- Add map follow button (new)
     local follow_button = button_flow.add{
         type = "sprite-button",
-        sprite = "utility/gps_map_icon",
+        sprite = "vcc-map",
         tooltip = {"vcc.follow-in-map"},
         tags = {
             action = "follow_vehicle",
@@ -676,8 +709,7 @@ local function add_buttons_to_vehicle_row(row, vehicle, button_flow)
         }
         call_button.style.size = 28
         
-        -- Disable the call button if spidertron is occupied
-        if vehicle.get_driver() then
+        if vcc_should_disable_call_spidertron_row(vehicle) then
             call_button.enabled = false
             call_button.tooltip = {"vcc.spidertron-occupied"}
         end
@@ -697,8 +729,7 @@ local function add_buttons_to_vehicle_row(row, vehicle, button_flow)
         }
         connect_button.style.size = 28
         
-        -- Disable if vehicle is occupied
-        if vehicle.get_driver() then
+        if vcc_should_disable_neural_connect_row(vehicle) then
             connect_button.enabled = false
             connect_button.tooltip = {"vcc.connect-disabled-tooltip"}
         end
@@ -1612,46 +1643,28 @@ function control_center.register_events()
     end)
 end
 
--- Connect to a vehicle using Neural Spider Control
+-- Connect to a vehicle using Neural Spider Control (remote interface; cross-mod require is not used)
 function control_center.connect_to_vehicle(player, unit_number, surface_index)
-    log_debug("Attempting to connect to vehicle #" .. unit_number)
-    
-    local surface = game.surfaces[surface_index]
-    if not surface then return end
-    
-    -- Find the vehicle
-    local vehicle = nil
-    for _, entity in pairs(surface.find_entities_filtered{type = {"spider-vehicle", "car", "locomotive"}}) do
-        if entity.unit_number == unit_number then
-            vehicle = entity
-            break
-        end
-    end
-    
-    if not vehicle or not vehicle.valid then
-        --player.print({"vcc-gui.vehicle-not-found"})
+    log_debug("Attempting to connect to vehicle #" .. tostring(unit_number))
+
+    if not player or not player.valid then
         return
     end
-    
-    -- If Neural Spider Control mod is active, use it
-    if script.active_mods["neural-spider-control"] then
-        -- Close the control center GUI
-        if player.gui.screen.vehicle_control_centre then
-            player.gui.screen.vehicle_control_centre.destroy()
-        end
-        
-        -- Call the connect function directly
-        --local neural_connect = require("__neural-spider-control__.scripts.neural_connect")
-        if neural_connect and neural_connect.connect_to_spidertron then
-            neural_connect.connect_to_spidertron({
-                player_index = player.index,
-                spidertron = vehicle
-            })
-        else
-            --player.print({"vcc-gui.connect-failed"})
-        end
+
+    local vehicle = find_vehicle_by_unit_number(unit_number, surface_index)
+    if not vehicle or not vehicle.valid then
+        return
+    end
+
+    control_center.close_gui(player)
+
+    if remote.interfaces["neural-spider-control"] and remote.interfaces["neural-spider-control"]["connect_to_vehicle"] then
+        remote.call("neural-spider-control", "connect_to_vehicle", {
+            player_index = player.index,
+            vehicle = vehicle
+        })
     else
-        --player.print({"vcc-gui.neural-mod-not-installed"})
+        player.print("Failed to connect: Neural Spider Control mod may be missing or not properly loaded.")
     end
 end
 

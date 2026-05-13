@@ -10,6 +10,234 @@ end
 -- Check if Neural Spider Control mod is present
 local neural_mod_present = script.active_mods["neural-spider-control"] ~= nil
 
+local CONTEXT_BUTTON_ACTION = "vcc_context_button_click"
+local VEHICLE_CONTEXT_TOOLBAR_NAME = "vcc_vehicle_context_toolbar"
+local VEHICLE_CONTEXT_BUTTON_FLOW_NAME = "button_flow"
+local PLAYER_CONTEXT_TOOLBAR_NAME = "vcc_player_context_toolbar"
+local PLAYER_CONTEXT_BUTTON_FLOW_NAME = "vcc_player_context_flow"
+local provider_registry = {}
+
+local function provider_key(mod_id, button_id)
+    return tostring(mod_id) .. "\x1f" .. tostring(button_id)
+end
+
+local function sanitize_key(key)
+    return key:gsub("[^%w_]", "_")
+end
+
+--- Old NSC rows used vanilla sprites that no longer exist in 2.0. Remap only
+--- those to VCC sprites from data.lua (vcc-map, vcc-whistle). Everything else
+--- is passed through unchanged (NSC already registers vcc-* where needed).
+local function resolved_context_sprite(sprite)
+    if type(sprite) ~= "string" or sprite == "" then
+        return "utility/questionmark"
+    end
+    if sprite == "utility/open_map" or sprite == "utility/gps_map_icon" then
+        return "vcc-map"
+    end
+    if sprite == "utility/entity_info" then
+        return "vcc-whistle"
+    end
+    return sprite
+end
+
+local function serialize_vehicle(vehicle)
+    if not vehicle or not vehicle.valid then
+        return nil
+    end
+    return {
+        unit_number = vehicle.unit_number,
+        surface_index = vehicle.surface.index,
+        vehicle_type = vehicle.type
+    }
+end
+
+--- player.opened may be LuaEntity, LuaGuiElement, LuaEquipmentGrid, etc.
+local function opened_is_vehicle_entity(opened)
+    return opened and opened.valid and opened.object_name == "LuaEntity"
+        and (opened.type == "spider-vehicle" or opened.type == "car")
+end
+
+local function ensure_provider_storage()
+    storage.vcc = storage.vcc or {}
+    storage.vcc.context_button_registry = storage.vcc.context_button_registry or {}
+end
+
+local function restore_provider_registry_from_storage()
+    provider_registry = {}
+    if not storage or not storage.vcc or type(storage.vcc.context_button_registry) ~= "table" then
+        return
+    end
+    for key, cfg in pairs(storage.vcc.context_button_registry) do
+        provider_registry[key] = cfg
+    end
+end
+
+local function persist_provider_entry(entry)
+    ensure_provider_storage()
+    storage.vcc.context_button_registry[entry.key] = {
+        mod_id = entry.mod_id,
+        button_id = entry.button_id,
+        key = entry.key,
+        context = entry.context,
+        vehicle_types = entry.vehicle_types,
+        priority = entry.priority,
+        sprite = entry.sprite,
+        tooltip = entry.tooltip,
+        style = entry.style,
+        show_when_remote_no_selection = entry.show_when_remote_no_selection,
+        callback_interface = entry.callback_interface,
+        condition_action = entry.condition_action,
+        tags_action = entry.tags_action,
+        click_action = entry.click_action
+    }
+end
+
+local function register_context_button(mod_id, button_id, config)
+    if type(mod_id) ~= "string" or type(button_id) ~= "string" or type(config) ~= "table" then
+        return false
+    end
+
+    local key = provider_key(mod_id, button_id)
+    local prev = provider_registry[key] or {}
+    local vehicle_types = config.vehicle_types or prev.vehicle_types or {}
+    local entry = {
+        mod_id = mod_id,
+        button_id = button_id,
+        key = key,
+        context = config.context or prev.context or "vehicle_relative",
+        vehicle_types = vehicle_types,
+        priority = config.priority or prev.priority or 100,
+        sprite = config.sprite or prev.sprite or "utility/questionmark",
+        tooltip = config.tooltip or prev.tooltip,
+        style = config.style or prev.style or "slot_sized_button",
+        show_when_remote_no_selection = config.show_when_remote_no_selection == true or prev.show_when_remote_no_selection == true,
+        callback_interface = config.callback_interface or prev.callback_interface or mod_id,
+        condition_action = config.condition_action or prev.condition_action,
+        tags_action = config.tags_action or prev.tags_action,
+        click_action = config.click_action or prev.click_action
+    }
+
+    provider_registry[key] = entry
+    persist_provider_entry(entry)
+    return true
+end
+
+local function unregister_context_button(mod_id, button_id)
+    if type(mod_id) ~= "string" or type(button_id) ~= "string" then
+        return false
+    end
+    local key = provider_key(mod_id, button_id)
+    provider_registry[key] = nil
+    ensure_provider_storage()
+    storage.vcc.context_button_registry[key] = nil
+    return true
+end
+
+local function collect_selected_vehicles(player)
+    local raw = player and player.spidertron_remote_selection
+    local out = {}
+    if not raw then
+        return out
+    end
+    for _, vehicle in ipairs(raw) do
+        if vehicle and vehicle.valid and (vehicle.type == "spider-vehicle" or vehicle.type == "car") then
+            table.insert(out, vehicle)
+        end
+    end
+    return out
+end
+
+local function player_holding_spidertron_remote(player)
+    if not player or not player.valid then
+        return false
+    end
+    local stack = player.cursor_stack
+    if not stack or not stack.valid_for_read then
+        return false
+    end
+    if stack.name == "spidertron-remote" then
+        return true
+    end
+    return stack.prototype and stack.prototype.type == "spidertron-remote"
+end
+
+local function make_remote_selection_signature(player)
+    if not player_holding_spidertron_remote(player) then
+        return "no-remote"
+    end
+
+    local selected = collect_selected_vehicles(player)
+    if #selected == 0 then
+        return "remote:none"
+    end
+
+    local parts = {}
+    for _, vehicle in ipairs(selected) do
+        table.insert(parts, tostring(vehicle.surface.index) .. ":" .. tostring(vehicle.unit_number))
+    end
+    table.sort(parts)
+    return "remote:" .. table.concat(parts, "|")
+end
+
+local function call_provider_action(entry, action_name, payload)
+    if not entry or not action_name then
+        return nil, false
+    end
+    local interface_name = entry.callback_interface or entry.mod_id
+    if not remote.interfaces[interface_name] or not remote.interfaces[interface_name][action_name] then
+        return nil, false
+    end
+    local ok, result = pcall(remote.call, interface_name, action_name, payload)
+    if not ok then
+        log_debug("Provider callback failed: " .. interface_name .. "." .. action_name .. " -> " .. tostring(result))
+        return nil, false
+    end
+    return result, true
+end
+
+local function get_spider_relative_gui_type()
+    local d = defines.relative_gui_type
+    return d.spider_vehicle_gui or d.spidertron_gui
+end
+
+local function build_vehicle_anchor(vehicle)
+    if not vehicle or not vehicle.valid then
+        return nil
+    end
+    if vehicle.type == "spider-vehicle" then
+        local gui_type = get_spider_relative_gui_type()
+        if not gui_type then
+            return nil
+        end
+        return {gui = gui_type, position = defines.relative_gui_position.right}
+    end
+    if vehicle.type == "car" then
+        return {gui = defines.relative_gui_type.car_gui, position = defines.relative_gui_position.right}
+    end
+    return nil
+end
+
+local function destroy_vehicle_context_toolbar(player)
+    if not player or not player.valid then
+        return
+    end
+    local root = player.gui.relative[VEHICLE_CONTEXT_TOOLBAR_NAME]
+    if root and root.valid then
+        root.destroy()
+    end
+end
+
+local function destroy_player_context_toolbar(player)
+    if not player or not player.valid then
+        return
+    end
+    local root = player.gui.left[PLAYER_CONTEXT_TOOLBAR_NAME]
+    if root and root.valid then
+        root.destroy()
+    end
+end
+
 -- Initialize mod
 
 -- Scan for vehicles on all surfaces and cache the results
@@ -83,6 +311,9 @@ local function init()
     storage.vcc.neural_mod_present = neural_mod_present
     storage.vcc.last_vehicle_type = storage.vcc.last_vehicle_type or {}
     storage.vcc.vehicle_filters = storage.vcc.vehicle_filters or {}
+    storage.vcc.context_button_registry = storage.vcc.context_button_registry or {}
+    storage.vcc.remote_toolbar_state = storage.vcc.remote_toolbar_state or {}
+    restore_provider_registry_from_storage()
     
     log_debug("Neural Spider Control mod " .. (neural_mod_present and "is" or "is not") .. " present")
     
@@ -171,6 +402,268 @@ local function connect_to_vehicle(player, unit_number, surface_index)
     end
 end
 
+local function sort_provider_entries(entries)
+    table.sort(entries, function(a, b)
+        if a.priority ~= b.priority then
+            return a.priority < b.priority
+        end
+        return a.key < b.key
+    end)
+end
+
+local function provider_supports_vehicle(entry, vehicle_type)
+    if not entry.vehicle_types or #entry.vehicle_types == 0 then
+        return true
+    end
+    for _, allowed in ipairs(entry.vehicle_types) do
+        if allowed == vehicle_type then
+            return true
+        end
+    end
+    return false
+end
+
+local function build_provider_payload(player, context_name, context_vehicle, selected_vehicles)
+    local serialized_selected = {}
+    for _, selected in ipairs(selected_vehicles) do
+        local ref = serialize_vehicle(selected)
+        if ref then
+            table.insert(serialized_selected, ref)
+        end
+    end
+    return {
+        player_index = player.index,
+        context = context_name,
+        vehicle = serialize_vehicle(context_vehicle),
+        selected_vehicles = serialized_selected
+    }
+end
+
+local function render_vehicle_context_toolbar(player, vehicle)
+    if not player or not player.valid then
+        return
+    end
+    if not vehicle or not vehicle.valid or (vehicle.type ~= "spider-vehicle" and vehicle.type ~= "car") then
+        destroy_vehicle_context_toolbar(player)
+        return
+    end
+
+    local anchor = build_vehicle_anchor(vehicle)
+    if not anchor then
+        destroy_vehicle_context_toolbar(player)
+        return
+    end
+
+    local root = player.gui.relative[VEHICLE_CONTEXT_TOOLBAR_NAME]
+    if root and root.valid then
+        root.destroy()
+    end
+
+    root = player.gui.relative.add{
+        type = "frame",
+        name = VEHICLE_CONTEXT_TOOLBAR_NAME,
+        direction = "vertical",
+        anchor = anchor
+    }
+
+    local flow = root.add{
+        type = "flow",
+        name = VEHICLE_CONTEXT_BUTTON_FLOW_NAME,
+        direction = "vertical"
+    }
+    flow.style.vertical_spacing = 2
+
+    local selected_vehicles = collect_selected_vehicles(player)
+    local payload = build_provider_payload(player, "vehicle_relative", vehicle, selected_vehicles)
+    local visible_entries = {}
+    for _, entry in pairs(provider_registry) do
+        if entry.context == "vehicle_relative" and provider_supports_vehicle(entry, vehicle.type) then
+            local visible = true
+            if entry.condition_action then
+                local result, ok = call_provider_action(entry, entry.condition_action, payload)
+                visible = ok and result == true
+            end
+            if visible then
+                table.insert(visible_entries, entry)
+            end
+        end
+    end
+    sort_provider_entries(visible_entries)
+
+    for _, entry in ipairs(visible_entries) do
+        local tags = {
+            action = CONTEXT_BUTTON_ACTION,
+            provider_key = entry.key,
+            vehicle_unit_number = vehicle.unit_number,
+            surface_index = vehicle.surface.index
+        }
+        if entry.tags_action then
+            local generated_tags, ok = call_provider_action(entry, entry.tags_action, payload)
+            if ok and type(generated_tags) == "table" then
+                for k, v in pairs(generated_tags) do
+                    tags[k] = v
+                end
+            end
+        end
+
+        local btn = flow.add{
+            type = "sprite-button",
+            name = "vcc_ctx_" .. sanitize_key(entry.key),
+            sprite = resolved_context_sprite(entry.sprite or "utility/questionmark"),
+            tooltip = entry.tooltip,
+            style = entry.style or "slot_sized_button",
+            tags = tags
+        }
+        if btn and btn.valid then
+            btn.style.size = 28
+        end
+    end
+
+    if #visible_entries == 0 then
+        root.destroy()
+    end
+end
+
+local function render_player_context_toolbar(player)
+    if not player or not player.valid then
+        return
+    end
+
+    local selected_vehicles = collect_selected_vehicles(player)
+    local holding_remote = player_holding_spidertron_remote(player)
+    local remote_no_selection = (#selected_vehicles == 0 and holding_remote)
+    if #selected_vehicles == 0 and not holding_remote then
+        destroy_player_context_toolbar(player)
+        return
+    end
+
+    local payload = build_provider_payload(player, "player_left_toolbar", nil, selected_vehicles)
+    local visible_entries = {}
+    for _, entry in pairs(provider_registry) do
+        if entry.context == "player_left_toolbar" then
+            local allowed = (#selected_vehicles > 0)
+            if remote_no_selection then
+                allowed = entry.show_when_remote_no_selection == true
+            elseif #selected_vehicles > 0 and entry.vehicle_types and #entry.vehicle_types > 0 then
+                allowed = false
+                for _, selected in ipairs(selected_vehicles) do
+                    if provider_supports_vehicle(entry, selected.type) then
+                        allowed = true
+                        break
+                    end
+                end
+            end
+
+            if allowed then
+                local visible = true
+                if entry.condition_action then
+                    local result, ok = call_provider_action(entry, entry.condition_action, payload)
+                    visible = ok and result == true
+                end
+                if visible then
+                    table.insert(visible_entries, entry)
+                end
+            end
+        end
+    end
+    sort_provider_entries(visible_entries)
+
+    if #visible_entries == 0 then
+        destroy_player_context_toolbar(player)
+        return
+    end
+
+    local root = player.gui.left[PLAYER_CONTEXT_TOOLBAR_NAME]
+    if not root or not root.valid then
+        root = player.gui.left.add{
+            type = "frame",
+            name = PLAYER_CONTEXT_TOOLBAR_NAME,
+            direction = "vertical"
+        }
+    end
+
+    local flow = root[PLAYER_CONTEXT_BUTTON_FLOW_NAME]
+    if not flow or not flow.valid then
+        root.clear()
+        flow = root.add{
+            type = "flow",
+            name = PLAYER_CONTEXT_BUTTON_FLOW_NAME,
+            direction = "vertical"
+        }
+        flow.style.vertical_spacing = 2
+    else
+        flow.clear()
+    end
+
+    for _, entry in ipairs(visible_entries) do
+        local tags = {
+            action = CONTEXT_BUTTON_ACTION,
+            provider_key = entry.key
+        }
+        if entry.tags_action then
+            local generated_tags, ok = call_provider_action(entry, entry.tags_action, payload)
+            if ok and type(generated_tags) == "table" then
+                for k, v in pairs(generated_tags) do
+                    tags[k] = v
+                end
+            end
+        end
+
+        local btn = flow.add{
+            type = "sprite-button",
+            name = "vcc_left_" .. sanitize_key(entry.key),
+            sprite = resolved_context_sprite(entry.sprite or "utility/questionmark"),
+            tooltip = entry.tooltip,
+            style = entry.style or "slot_sized_button",
+            tags = tags
+        }
+        if btn and btn.valid then
+            btn.style.size = 28
+        end
+    end
+end
+
+local function refresh_context_toolbars_for_player(player)
+    if not player or not player.valid then
+        return
+    end
+    local opened = player.opened
+    if opened_is_vehicle_entity(opened) then
+        render_vehicle_context_toolbar(player, opened)
+    else
+        destroy_vehicle_context_toolbar(player)
+    end
+    render_player_context_toolbar(player)
+end
+
+local function dispatch_context_button_click(player, element)
+    local tags = element.tags or {}
+    local provider_key_name = tags.provider_key
+    if not provider_key_name then
+        return false
+    end
+    local entry = provider_registry[provider_key_name]
+    if not entry or not entry.click_action then
+        return false
+    end
+
+    local selected_vehicles = collect_selected_vehicles(player)
+    local context_vehicle = nil
+    if tags.vehicle_unit_number and tags.surface_index then
+        context_vehicle = find_vehicle_by_unit_number(tags.vehicle_unit_number, tags.surface_index)
+    end
+    if not context_vehicle and opened_is_vehicle_entity(player.opened) then
+        context_vehicle = player.opened
+    end
+
+    local payload = build_provider_payload(player, entry.context, context_vehicle, selected_vehicles)
+    payload.button_tags = tags
+    payload.element_name = element.name
+    call_provider_action(entry, entry.click_action, payload)
+    refresh_context_toolbars_for_player(player)
+    return true
+end
+
 -- Event handlers
 
 -- Handle new players
@@ -181,6 +674,12 @@ end)
 -- Handle configuration changes
 script.on_configuration_changed(function(data)
     log_debug("Configuration changed")
+    ensure_provider_storage()
+    restore_provider_registry_from_storage()
+end)
+
+script.on_load(function()
+    restore_provider_registry_from_storage()
 end)
 
 function update_vehicle_tracking()
@@ -254,6 +753,12 @@ script.on_event(defines.events.on_gui_click, function(event)
     
     -- Extract action from tags if present
     local action = element.tags and element.tags.action
+
+    if action == CONTEXT_BUTTON_ACTION then
+        if dispatch_context_button_click(player, element) then
+            return
+        end
+    end
     
     -- Handle close buttons
     if element.name == "vcc_close_button" or element.name == "close_vehicle_control_center" then
@@ -503,6 +1008,14 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
     end
 end)
 
+script.on_event(defines.events.on_gui_opened, function(event)
+    local player = game.get_player(event.player_index)
+    if not player or not player.valid then
+        return
+    end
+    refresh_context_toolbars_for_player(player)
+end)
+
 -- Handle GUI close events
 script.on_event(defines.events.on_gui_closed, function(event)
     local player = game.get_player(event.player_index)
@@ -521,6 +1034,8 @@ script.on_event(defines.events.on_gui_closed, function(event)
             player_data.last_hovered_vehicle = nil
         end
     end
+
+    refresh_context_toolbars_for_player(player)
 end)
 
 -- Handle tick events
@@ -555,6 +1070,20 @@ script.on_event(defines.events.on_tick, function(event)
             end
         end
         ::continue::
+    end
+
+    if event.tick % 10 == 0 then
+        storage.vcc.remote_toolbar_state = storage.vcc.remote_toolbar_state or {}
+        for _, player in pairs(game.connected_players) do
+            if player and player.valid then
+                local signature = make_remote_selection_signature(player)
+                local previous = storage.vcc.remote_toolbar_state[player.index]
+                if previous ~= signature then
+                    storage.vcc.remote_toolbar_state[player.index] = signature
+                    refresh_context_toolbars_for_player(player)
+                end
+            end
+        end
     end
 end)
 
@@ -677,36 +1206,125 @@ script.on_event(defines.events.on_player_left_game, function(event)
     player_data.inventory_surface_index = nil
 end)
 
-remote.add_interface("vehicle-control-center", {
-    render_vehicle = function(data)
-        local player = game.get_player(data.player_index)
-        local unit_number = data.unit_number
-        local surface_index = data.surface_index
-        
-        local surface = game.surfaces[surface_index]
-        local vehicle = nil
-        
-        for _, entity in pairs(surface.find_entities_filtered{type = {"spider-vehicle", "car", "locomotive"}}) do
-            if entity.unit_number == unit_number then
-                vehicle = entity
-                break
-            end
+local function render_vehicle_remote(data)
+    local player = game.get_player(data.player_index)
+    local unit_number = data.unit_number
+    local surface_index = data.surface_index
+    
+    local surface = game.surfaces[surface_index]
+    local vehicle = nil
+    
+    for _, entity in pairs(surface.find_entities_filtered{type = {"spider-vehicle", "car", "locomotive"}}) do
+        if entity.unit_number == unit_number then
+            vehicle = entity
+            break
         end
-        
-        if not vehicle then
-            player.print("Vehicle not found")
-            return false
+    end
+    
+    if not vehicle then
+        player.print("Vehicle not found")
+        return false
+    end
+    
+    local position = vehicle.position
+    player.set_controller({
+        type = defines.controllers.remote,
+        position = position,
+        surface = surface
+    })
+    return true
+end
+
+--- Same as VCC GUI row "call spidertron": sets autopilot to player.position
+--- (where you are looking in remote view).
+local function call_spidertron_to_location_remote(data)
+    local player = game.get_player(data.player_index)
+    if not player or not player.valid then
+        return false
+    end
+    local unit_number = data.unit_number or data.spidertron_unit_number
+    local surface_index = data.surface_index
+    if not unit_number or not surface_index then
+        return false
+    end
+    if control_center.call_spidertron_to_location then
+        control_center.call_spidertron_to_location(player, unit_number, surface_index)
+    end
+    return true
+end
+
+--- Same as VCC GUI "follow on map": closes inventories / VCC, then centers map view on the vehicle.
+local function follow_vehicle_in_map_remote(data)
+    local player = game.get_player(data.player_index)
+    if not player or not player.valid then
+        return false
+    end
+    local unit_number = data.unit_number or data.vehicle_unit_number
+    local surface_index = data.surface_index
+    if not unit_number or not surface_index then
+        return false
+    end
+    if control_center.follow_vehicle_in_map then
+        control_center.follow_vehicle_in_map(player, unit_number, surface_index)
+    end
+    return true
+end
+
+local function open_control_center_remote(player_index)
+    local player = game.get_player(player_index)
+    if not player or not player.valid then
+        return false
+    end
+    control_center.open_gui(player)
+    return true
+end
+
+local function refresh_context_buttons_remote(player_index)
+    if player_index then
+        local player = game.get_player(player_index)
+        if player and player.valid then
+            refresh_context_toolbars_for_player(player)
         end
-        
-        local position = vehicle.position
-        player.set_controller({
-            type = defines.controllers.remote,
-            position = position,
-            surface = surface
-        })
         return true
     end
-})
+    for _, player in pairs(game.players) do
+        if player and player.valid then
+            refresh_context_toolbars_for_player(player)
+        end
+    end
+    return true
+end
+
+local function register_button_compat(mod_id, config)
+    if type(config) ~= "table" then
+        return false
+    end
+    return register_context_button(mod_id, config.action, {
+        context = "vehicle_relative",
+        vehicle_types = {config.vehicle_type},
+        priority = config.priority or 100,
+        sprite = config.sprite or "utility/questionmark",
+        tooltip = config.tooltip,
+        style = config.style or "slot_sized_button",
+        callback_interface = mod_id,
+        click_action = config.callback
+    })
+end
+
+local vehicle_control_center_interface = {
+    render_vehicle = render_vehicle_remote,
+    open_control_centre = open_control_center_remote,
+    open_control_center = open_control_center_remote,
+    call_spidertron_to_location = call_spidertron_to_location_remote,
+    follow_vehicle_in_map = follow_vehicle_in_map_remote,
+    register_context_button = register_context_button,
+    unregister_context_button = unregister_context_button,
+    refresh_context_buttons = refresh_context_buttons_remote,
+    register_button = register_button_compat
+}
+
+remote.add_interface("vehicle-control-center", vehicle_control_center_interface)
+remote.add_interface("vehicle-control-centre", vehicle_control_center_interface)
 
 -- Handle GUI selection changes
 script.on_event(defines.events.on_gui_selection_state_changed, function(event)
@@ -727,6 +1345,23 @@ script.on_event(defines.events.on_player_cursor_stack_changed, function(event)
     if control_center.on_player_cursor_stack_changed then
         control_center.on_player_cursor_stack_changed(event)
     end
+
+    refresh_context_toolbars_for_player(player)
+end)
+
+script.on_event(defines.events.on_player_used_spidertron_remote, function(event)
+    local player = game.get_player(event.player_index)
+    if not player or not player.valid then
+        return
+    end
+    storage.vcc.remote_toolbar_state = storage.vcc.remote_toolbar_state or {}
+    storage.vcc.remote_toolbar_state[player.index] = make_remote_selection_signature(player)
+    refresh_context_toolbars_for_player(player)
+end)
+
+script.on_event(defines.events.on_selected_entity_changed, function(event)
+    local player = game.get_player(event.player_index)
+    refresh_context_toolbars_for_player(player)
 end)
 
 -- Handle keyboard shortcuts

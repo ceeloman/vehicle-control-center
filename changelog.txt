@@ -1,8 +1,16 @@
 ---------------------------------------------------------------------------------------------------
-Version: 1.1.0
-Date: 2025-06-06
+Version: 1.2.0
+Date: 2026-05-13
   Features
-    - Expanded gui features
+    - Expanded GUI for browsing and controlling vehicles from one place.
+    - Mods can plug in extra context buttons on spidertron, car, and spidertron-remote UIs; registrations persist in your save and are ordered by priority.
+    - Added our own map and whistle icons so row buttons still look right on Factorio 2.0 (some old vanilla utility sprites are gone).
+  Changes
+    - Neural Spider Control: vehicle connect now uses NSC's remote interface instead of loading their scripts directly, which is kinder to load order and updates.
+    - Smarter "occupied" rules: "call here" only locks out when a real player is in the seat (dummy engineers from NSC don't count). Neural connect can defer to NSC's own rule when it exposes one.
+    - "Get spidertron remote" prefers an empty cursor, can use a free inventory slot and swap onto the cursor when needed, and links using remote selection when the game supports it.
+    - "Call spidertron here" falls back to your physical position when you're in map or remote mode, and won't send the spidertron to another surface by mistake.
+    - Follow-on-map uses the mod’s map icon instead of a removed vanilla sprite.
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.0
 Date: 2025-05-10
