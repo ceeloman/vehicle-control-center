@@ -93,7 +93,7 @@ local function persist_provider_entry(entry)
     }
 end
 
-local function register_context_button(mod_id, button_id, config)
+local function register_context_button(mod_id, button_id, config, persist)
     if type(mod_id) ~= "string" or type(button_id) ~= "string" or type(config) ~= "table" then
         return false
     end
@@ -119,7 +119,9 @@ local function register_context_button(mod_id, button_id, config)
     }
 
     provider_registry[key] = entry
-    persist_provider_entry(entry)
+    if persist ~= false then
+        persist_provider_entry(entry)
+    end
     return true
 end
 
@@ -132,6 +134,18 @@ local function unregister_context_button(mod_id, button_id)
     ensure_provider_storage()
     storage.vcc.context_button_registry[key] = nil
     return true
+end
+
+local function register_builtin_context_buttons(persist)
+    register_context_button("vehicle-control-center", "get_remote_vehicle", {
+        context = "vehicle_relative",
+        vehicle_types = {"spider-vehicle"},
+        priority = 8,
+        sprite = "item/spidertron-remote",
+        tooltip = {"vcc.get-remote"},
+        callback_interface = "vehicle-control-center",
+        click_action = "vcc_click_get_remote"
+    }, persist)
 end
 
 local function collect_selected_vehicles(player)
@@ -314,6 +328,7 @@ local function init()
     storage.vcc.context_button_registry = storage.vcc.context_button_registry or {}
     storage.vcc.remote_toolbar_state = storage.vcc.remote_toolbar_state or {}
     restore_provider_registry_from_storage()
+    register_builtin_context_buttons()
     
     log_debug("Neural Spider Control mod " .. (neural_mod_present and "is" or "is not") .. " present")
     
@@ -692,10 +707,13 @@ script.on_configuration_changed(function(data)
     log_debug("Configuration changed")
     ensure_provider_storage()
     restore_provider_registry_from_storage()
+    register_builtin_context_buttons()
 end)
 
 script.on_load(function()
     restore_provider_registry_from_storage()
+    -- on_load must not modify storage; only refresh in-memory built-in entries.
+    register_builtin_context_buttons(false)
 end)
 
 function update_vehicle_tracking()
@@ -1297,6 +1315,26 @@ local function open_control_center_remote(player_index)
     return true
 end
 
+--- Same as VCC GUI row "get remote": gives a linked spidertron remote on cursor.
+local function vcc_click_get_remote(payload)
+    local player = payload and game.get_player(payload.player_index)
+    if not player or not player.valid then
+        return false
+    end
+    local tags = payload.button_tags or {}
+    local unit_number = tags.unit_number or tags.vehicle_unit_number
+    local surface_index = tags.surface_index
+    if (not unit_number or not surface_index) and payload.vehicle then
+        unit_number = payload.vehicle.unit_number
+        surface_index = payload.vehicle.surface_index
+    end
+    if not unit_number or not surface_index then
+        return false
+    end
+    control_center.get_spidertron_remote(player, unit_number, surface_index)
+    return true
+end
+
 local function refresh_context_buttons_remote(player_index)
     if player_index then
         local player = game.get_player(player_index)
@@ -1335,6 +1373,7 @@ local vehicle_control_center_interface = {
     open_control_center = open_control_center_remote,
     call_spidertron_to_location = call_spidertron_to_location_remote,
     follow_vehicle_in_map = follow_vehicle_in_map_remote,
+    vcc_click_get_remote = vcc_click_get_remote,
     register_context_button = register_context_button,
     unregister_context_button = unregister_context_button,
     refresh_context_buttons = refresh_context_buttons_remote,
