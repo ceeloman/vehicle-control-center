@@ -12,9 +12,9 @@ local neural_mod_present = script.active_mods["neural-spider-control"] ~= nil
 
 local CONTEXT_BUTTON_ACTION = "vcc_context_button_click"
 local VEHICLE_CONTEXT_TOOLBAR_NAME = "vcc_vehicle_context_toolbar"
-local VEHICLE_CONTEXT_BUTTON_FLOW_NAME = "button_flow"
+local CONTEXT_TOOLBAR_BUTTON_FRAME_NAME = "button_frame"
+local CONTEXT_TOOLBAR_BUTTON_FLOW_NAME = "button_flow"
 local PLAYER_CONTEXT_TOOLBAR_NAME = "vcc_player_context_toolbar"
-local PLAYER_CONTEXT_BUTTON_FLOW_NAME = "vcc_player_context_flow"
 local provider_registry = {}
 
 local function provider_key(mod_id, button_id)
@@ -462,16 +462,29 @@ local function render_vehicle_context_toolbar(player, vehicle)
     root = player.gui.relative.add{
         type = "frame",
         name = VEHICLE_CONTEXT_TOOLBAR_NAME,
-        direction = "vertical",
-        anchor = anchor
+        anchor = anchor,
+        style = "frame"
     }
+    root.style.horizontally_stretchable = false
+    root.style.vertically_stretchable = false
+    root.style.top_padding = 6
+    root.style.bottom_padding = 6
+    root.style.left_padding = 6
+    root.style.right_padding = 6
 
-    local flow = root.add{
+    local button_frame = root.add{
+        type = "frame",
+        name = CONTEXT_TOOLBAR_BUTTON_FRAME_NAME,
+        direction = "vertical",
+        style = "inside_shallow_frame"
+    }
+    button_frame.style.vertically_stretchable = false
+
+    local flow = button_frame.add{
         type = "flow",
-        name = VEHICLE_CONTEXT_BUTTON_FLOW_NAME,
+        name = CONTEXT_TOOLBAR_BUTTON_FLOW_NAME,
         direction = "vertical"
     }
-    flow.style.vertical_spacing = 2
 
     local selected_vehicles = collect_selected_vehicles(player)
     local payload = build_provider_payload(player, "vehicle_relative", vehicle, selected_vehicles)
@@ -514,9 +527,6 @@ local function render_vehicle_context_toolbar(player, vehicle)
             style = entry.style or "slot_sized_button",
             tags = tags
         }
-        if btn and btn.valid then
-            btn.style.size = 28
-        end
     end
 
     if #visible_entries == 0 then
@@ -574,26 +584,35 @@ local function render_player_context_toolbar(player)
     end
 
     local root = player.gui.left[PLAYER_CONTEXT_TOOLBAR_NAME]
-    if not root or not root.valid then
-        root = player.gui.left.add{
-            type = "frame",
-            name = PLAYER_CONTEXT_TOOLBAR_NAME,
-            direction = "vertical"
-        }
+    if root and root.valid then
+        root.destroy()
     end
 
-    local flow = root[PLAYER_CONTEXT_BUTTON_FLOW_NAME]
-    if not flow or not flow.valid then
-        root.clear()
-        flow = root.add{
-            type = "flow",
-            name = PLAYER_CONTEXT_BUTTON_FLOW_NAME,
-            direction = "vertical"
-        }
-        flow.style.vertical_spacing = 2
-    else
-        flow.clear()
-    end
+    root = player.gui.left.add{
+        type = "frame",
+        name = PLAYER_CONTEXT_TOOLBAR_NAME,
+        style = "frame"
+    }
+    root.style.horizontally_stretchable = false
+    root.style.vertically_stretchable = false
+    root.style.top_padding = 6
+    root.style.bottom_padding = 6
+    root.style.left_padding = 6
+    root.style.right_padding = 6
+
+    local button_frame = root.add{
+        type = "frame",
+        name = CONTEXT_TOOLBAR_BUTTON_FRAME_NAME,
+        direction = "vertical",
+        style = "inside_shallow_frame"
+    }
+    button_frame.style.vertically_stretchable = false
+
+    local flow = button_frame.add{
+        type = "flow",
+        name = CONTEXT_TOOLBAR_BUTTON_FLOW_NAME,
+        direction = "vertical"
+    }
 
     for _, entry in ipairs(visible_entries) do
         local tags = {
@@ -617,9 +636,6 @@ local function render_player_context_toolbar(player)
             style = entry.style or "slot_sized_button",
             tags = tags
         }
-        if btn and btn.valid then
-            btn.style.size = 28
-        end
     end
 end
 
