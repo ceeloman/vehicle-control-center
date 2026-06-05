@@ -85,6 +85,7 @@ local function persist_provider_entry(entry)
         sprite = entry.sprite,
         tooltip = entry.tooltip,
         style = entry.style,
+        toggled = entry.toggled,
         show_when_remote_no_selection = entry.show_when_remote_no_selection,
         callback_interface = entry.callback_interface,
         condition_action = entry.condition_action,
@@ -101,6 +102,10 @@ local function register_context_button(mod_id, button_id, config, persist)
     local key = provider_key(mod_id, button_id)
     local prev = provider_registry[key] or {}
     local vehicle_types = config.vehicle_types or prev.vehicle_types or {}
+    local toggled = prev.toggled == true
+    if config.toggled ~= nil then
+        toggled = config.toggled == true
+    end
     local entry = {
         mod_id = mod_id,
         button_id = button_id,
@@ -111,6 +116,7 @@ local function register_context_button(mod_id, button_id, config, persist)
         sprite = config.sprite or prev.sprite or "utility/questionmark",
         tooltip = config.tooltip or prev.tooltip,
         style = config.style or prev.style or "slot_sized_button",
+        toggled = toggled,
         show_when_remote_no_selection = config.show_when_remote_no_selection == true or prev.show_when_remote_no_selection == true,
         callback_interface = config.callback_interface or prev.callback_interface or mod_id,
         condition_action = config.condition_action or prev.condition_action,
@@ -542,6 +548,9 @@ local function render_vehicle_context_toolbar(player, vehicle)
             style = entry.style or "slot_sized_button",
             tags = tags
         }
+        if entry.toggled then
+            btn.toggled = true
+        end
     end
 
     if #visible_entries == 0 then
@@ -651,6 +660,9 @@ local function render_player_context_toolbar(player)
             style = entry.style or "slot_sized_button",
             tags = tags
         }
+        if entry.toggled then
+            btn.toggled = true
+        end
     end
 end
 
