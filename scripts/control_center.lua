@@ -648,133 +648,166 @@ local function collect_surfaces_with_vehicles(player_force, vehicle_type)
     return surfaces_data
 end
 
+local function wrap_vehicle_entity(entity)
+    if not entity or not entity.valid then
+        return nil
+    end
+    return {
+        entity = entity,
+        unit_number = entity.unit_number,
+        position = entity.position,
+        type = entity.type,
+        name = entity.name,
+        get_driver = function() return entity.get_driver() end,
+        prototype = entity.prototype,
+        surface = entity.surface
+    }
+end
+
+local function apply_action_buttons(button_flow, buttons)
+    for _, button_config in ipairs(buttons) do
+        local button_tags = button_config.tags or {}
+        button_tags.action = button_config.action
+        local button = button_flow.add{
+            type = "sprite-button",
+            sprite = button_config.sprite,
+            tooltip = button_config.tooltip,
+            tags = button_tags,
+            toggled = button_config.toggled
+        }
+        button.style.size = 28
+        if button_config.enabled == false then
+            button.enabled = false
+        end
+        if button_config.left_margin then
+            button.style.left_margin = button_config.left_margin
+        end
+        if button_config.vertical_align then
+            button.style.vertical_align = button_config.vertical_align
+        end
+    end
+end
+
+local function collect_vehicle_action_buttons(vehicle, options)
+    options = options or {}
+    local buttons = {}
+
+    if vehicle then
+        local unit_number = vehicle.unit_number
+        local surface_index = vehicle.surface.index
+
+        table.insert(buttons, {
+            sprite = "vcc-map",
+            tooltip = {"vcc.follow-in-map"},
+            action = "follow_vehicle",
+            tags = {unit_number = unit_number, surface_index = surface_index},
+            left_margin = 10,
+            vertical_align = "center"
+        })
+
+        table.insert(buttons, {
+            sprite = "utility/search",
+            tooltip = {"vcc.locate-vehicle"},
+            action = "locate_vehicle",
+            tags = {unit_number = unit_number, surface_index = surface_index}
+        })
+
+        table.insert(buttons, {
+            sprite = "entity/steel-chest",
+            tooltip = {"vcc.view-inventory"},
+            action = "view_inventory",
+            tags = {unit_number = unit_number, surface_index = surface_index}
+        })
+
+        if vehicle.type == "spider-vehicle" then
+            table.insert(buttons, {
+                sprite = "item/spidertron-remote",
+                tooltip = {"vcc.get-remote"},
+                action = "get_remote",
+                tags = {unit_number = unit_number, surface_index = surface_index}
+            })
+
+            local call_button = {
+                sprite = "vcc-whistle",
+                tooltip = {"vcc.call-spidertron"},
+                action = "call_spidertron",
+                tags = {unit_number = unit_number, surface_index = surface_index}
+            }
+            if vcc_should_disable_call_spidertron_row(vehicle) then
+                call_button.enabled = false
+                call_button.tooltip = {"vcc.spidertron-occupied"}
+            end
+            table.insert(buttons, call_button)
+        end
+
+        if options.include_neural_connect and script.active_mods["neural-spider-control"] then
+            local connect_button = {
+                sprite = "neural-connection-sprite",
+                tooltip = {"vcc.connect-tooltip"},
+                action = "vcc_connect",
+                tags = {unit_number = unit_number, surface_index = surface_index}
+            }
+            if vcc_should_disable_neural_connect_row(vehicle) then
+                connect_button.enabled = false
+                connect_button.tooltip = {"vcc.connect-disabled-tooltip"}
+            end
+            table.insert(buttons, connect_button)
+        end
+
+        if vehicle.type == "locomotive" and vehicle.entity and vehicle.entity.train then
+            local is_automatic = not vehicle.entity.train.manual_mode
+            table.insert(buttons, {
+                sprite = is_automatic and "virtual-signal/signal-A" or "virtual-signal/signal-M",
+                tooltip = is_automatic and {"vcc.train-mode-automatic"} or {"vcc.train-mode-manual"},
+                action = "toggle_train_mode",
+                tags = {unit_number = unit_number, surface_index = surface_index},
+                toggled = is_automatic
+            })
+        end
+
+        if options.engineer_unit_number then
+            table.insert(buttons, {
+                sprite = "utility/player_force_icon",
+                tooltip = {"vcc.neural-open-engineer"},
+                action = "neural_open_engineer",
+                tags = {engineer_unit_number = options.engineer_unit_number}
+            })
+        end
+
+        if options.neural_disconnect then
+            table.insert(buttons, {
+                sprite = "utility/close",
+                tooltip = {"vcc.neural-disconnect"},
+                action = "neural_disconnect",
+                tags = {unit_number = unit_number, surface_index = surface_index}
+            })
+        elseif options.neural_reconnect then
+            table.insert(buttons, {
+                sprite = "neural-connection-sprite",
+                tooltip = {"vcc.neural-reconnect"},
+                action = "neural_reconnect",
+                tags = {unit_number = unit_number, surface_index = surface_index}
+            })
+        end
+    end
+
+    if not vehicle and options.engineer_unit_number then
+        table.insert(buttons, {
+            sprite = "utility/player_force_icon",
+            tooltip = {"vcc.neural-open-engineer"},
+            action = "neural_open_engineer",
+            tags = {engineer_unit_number = options.engineer_unit_number}
+        })
+    end
+
+    return buttons
+end
+
 -- Helper function to add buttons to vehicle row
 local function add_buttons_to_vehicle_row(row, vehicle, button_flow)
-    -- Add map/render button
-    --[[
-    local render_button = button_flow.add{
-        type = "sprite-button",
-        sprite = "entity/radar",
-        tooltip = {"vcc.view-on-map"},
-        tags = {
-            action = "render",
-            unit_number = vehicle.unit_number,
-            surface_index = vehicle.surface.index
-        }
-    }
-    render_button.style.size = 28
-    ]]
-    -- Add map follow button (new)
-    local follow_button = button_flow.add{
-        type = "sprite-button",
-        sprite = "vcc-map",
-        tooltip = {"vcc.follow-in-map"},
-        tags = {
-            action = "follow_vehicle",
-            unit_number = vehicle.unit_number,
-            surface_index = vehicle.surface.index
-        }
-    }
-    follow_button.style.size = 28
-    follow_button.style.left_margin = 10
-    follow_button.style.vertical_align = "center"
-    
-    -- Add locator button (new)
-    local locator_button = button_flow.add{
-        type = "sprite-button",
-        sprite = "utility/search",
-        tooltip = {"vcc.locate-vehicle"},
-        tags = {
-            action = "locate_vehicle",
-            unit_number = vehicle.unit_number,
-            surface_index = vehicle.surface.index
-        }
-    }
-    locator_button.style.size = 28
-    
-    -- Add inventory view button (new)
-    local inventory_button = button_flow.add{
-        type = "sprite-button",
-        sprite = "entity/steel-chest",
-        tooltip = {"vcc.view-inventory"},
-        tags = {
-            action = "view_inventory",
-            unit_number = vehicle.unit_number,
-            surface_index = vehicle.surface.index
-        }
-    }
-    inventory_button.style.size = 28
-    
-    -- For spidertrons, add spidertron-specific buttons
-    if vehicle.type == "spider-vehicle" then
-        -- Add get remote button (new)
-        local remote_button = button_flow.add{
-            type = "sprite-button",
-            sprite = "item/spidertron-remote",
-            tooltip = {"vcc.get-remote"},
-            tags = {
-                action = "get_remote",
-                unit_number = vehicle.unit_number,
-                surface_index = vehicle.surface.index
-            }
-        }
-        remote_button.style.size = 28
-        
-        -- Add call to location button (new)
-        local call_button = button_flow.add{
-            type = "sprite-button",
-            sprite = "vcc-whistle",
-            tooltip = {"vcc.call-spidertron"},
-            tags = {
-                action = "call_spidertron",
-                unit_number = vehicle.unit_number,
-                surface_index = vehicle.surface.index
-            }
-        }
-        call_button.style.size = 28
-        
-        if vcc_should_disable_call_spidertron_row(vehicle) then
-            call_button.enabled = false
-            call_button.tooltip = {"vcc.spidertron-occupied"}
-        end
-    end
-    
-    -- Add neural connect button if neural mod is available (existing functionality)
-    if script.active_mods["neural-spider-control"] then
-        local connect_button = button_flow.add{
-            type = "sprite-button",
-            sprite = "neural-connection-sprite",
-            tooltip = {"vcc.connect-tooltip"},
-            tags = {
-                action = "vcc_connect",
-                unit_number = vehicle.unit_number,
-                surface_index = vehicle.surface.index
-            }
-        }
-        connect_button.style.size = 28
-        
-        if vcc_should_disable_neural_connect_row(vehicle) then
-            connect_button.enabled = false
-            connect_button.tooltip = {"vcc.connect-disabled-tooltip"}
-        end
-    end
-    if vehicle.type == "locomotive" and vehicle.entity.train then
-        local is_automatic = not vehicle.entity.train.manual_mode
-        
-        local mode_button = button_flow.add{
-            type = "sprite-button",
-            sprite = is_automatic and "virtual-signal/signal-A" or "virtual-signal/signal-M",
-            tooltip = is_automatic and {"vcc.train-mode-automatic"} or {"vcc.train-mode-manual"},
-            toggled = is_automatic,  -- Use toggled property for visual indication
-            tags = {
-                action = "toggle_train_mode",
-                unit_number = vehicle.unit_number,
-                surface_index = vehicle.surface.index
-            }
-        }
-        
-        mode_button.style.size = 28
-    end
+    apply_action_buttons(button_flow, collect_vehicle_action_buttons(vehicle, {
+        include_neural_connect = true
+    }))
 end
 
 function control_center.create_hover_camera_gui(player, vehicle_data, button_position)
@@ -926,9 +959,188 @@ function control_center.on_tick(event)
     end
 end
 
+local NEURAL_CONNECTIONS_TAB = "neural-connections"
+
+local function neural_mod_available()
+    return script.active_mods["neural-spider-control"] ~= nil
+        and remote.interfaces["neural-spider-control"]
+        and remote.interfaces["neural-spider-control"]["get_connections"]
+end
+
+local function fetch_neural_connections(player_index)
+    local ok, data = pcall(remote.call, "neural-spider-control", "get_connections", player_index)
+    if ok and type(data) == "table" then
+        return data
+    end
+    return {active = {}, orphaned = {}}
+end
+
+local function get_entity_display_caption(entity, fallback_name)
+    if entity and entity.valid then
+        if entity.entity_label and entity.entity_label ~= "" then
+            return entity.entity_label
+        end
+        return {"entity-name." .. entity.name}
+    end
+    if fallback_name and fallback_name ~= "" then
+        return {"entity-name." .. fallback_name}
+    end
+    return {"vcc.neural-unknown-vehicle"}
+end
+
+local function build_neural_row_caption(primary_caption, surface_info)
+    if surface_info then
+        return {"", primary_caption, " · ", surface_info.display_name}
+    end
+    return primary_caption
+end
+
+local function add_neural_connection_row(list, row_name, icon_sprite, row_caption, buttons)
+    local row = list.add{
+        type = "flow",
+        direction = "horizontal",
+        name = row_name
+    }
+    row.style.vertical_align = "center"
+    row.style.top_padding = 2
+    row.style.bottom_padding = 2
+
+    local icon = row.add{
+        type = "sprite",
+        sprite = icon_sprite
+    }
+    icon.style.size = {32, 32}
+    icon.style.stretch_image_to_widget_size = true
+    icon.style.margin = 2
+
+    local name_label = row.add{type = "label", caption = row_caption}
+    name_label.style.minimal_width = 220
+    name_label.style.single_line = true
+
+    local spacer = row.add{type = "empty-widget"}
+    spacer.style.horizontally_stretchable = true
+    spacer.style.minimal_width = 10
+
+    local button_flow = row.add{type = "flow", direction = "horizontal"}
+    button_flow.style.horizontal_align = "right"
+    apply_action_buttons(button_flow, buttons)
+end
+
+local function build_neural_connection_buttons(vehicle, engineer_unit_number, connection_kind)
+    if vehicle then
+        return collect_vehicle_action_buttons(vehicle, {
+            engineer_unit_number = engineer_unit_number,
+            neural_disconnect = connection_kind == "active",
+            neural_reconnect = connection_kind == "orphaned"
+        })
+    end
+
+    if engineer_unit_number then
+        return collect_vehicle_action_buttons(nil, {
+            engineer_unit_number = engineer_unit_number
+        })
+    end
+
+    return {}
+end
+
+local function build_neural_connections_content(main_content, player)
+    main_content.add{type = "line", direction = "horizontal"}
+
+    local connections = fetch_neural_connections(player.index)
+    local active = connections.active or {}
+    local orphaned = connections.orphaned or {}
+
+    local scroll = main_content.add{
+        type = "scroll-pane",
+        name = "neural_connections_list",
+        horizontal_scroll_policy = "never",
+        vertical_scroll_policy = "auto"
+    }
+    scroll.style.maximal_height = 300
+    scroll.style.minimal_width = 550
+
+    local has_rows = #active > 0 or #orphaned > 0
+
+    if has_rows then
+        local header = scroll.add{type = "label", caption = {"vcc.neural-active-connections"}}
+        header.style.font = "default-bold"
+        header.style.top_margin = 4
+        header.style.bottom_margin = 2
+    end
+
+    for index, connection in ipairs(active) do
+        local vehicle_entity = find_vehicle_by_unit_number(connection.vehicle_unit_number, connection.vehicle_surface_index)
+        local vehicle = wrap_vehicle_entity(vehicle_entity)
+        local surface = game.surfaces[connection.vehicle_surface_index]
+        local surface_info = surface and format_surface_name(surface.name) or nil
+        local icon_sprite = vehicle_entity and vehicle_entity.valid and ("entity/" .. vehicle_entity.name)
+            or (connection.vehicle_name and ("entity/" .. connection.vehicle_name) or "neural-connection-sprite")
+        local row_caption = build_neural_row_caption(
+            get_entity_display_caption(vehicle_entity, connection.vehicle_name),
+            surface_info
+        )
+        local buttons = build_neural_connection_buttons(vehicle, connection.engineer_unit_number, "active")
+
+        add_neural_connection_row(
+            scroll,
+            "neural_active_" .. index,
+            icon_sprite,
+            row_caption,
+            buttons
+        )
+    end
+
+    for index, connection in ipairs(orphaned) do
+        local vehicle_entity = connection.vehicle_id and connection.vehicle_surface
+            and find_vehicle_by_unit_number(connection.vehicle_id, connection.vehicle_surface)
+            or nil
+        local vehicle = wrap_vehicle_entity(vehicle_entity)
+        local surface = connection.engineer_surface_index and game.surfaces[connection.engineer_surface_index]
+            or (connection.vehicle_surface and game.surfaces[connection.vehicle_surface])
+        local surface_info = surface and format_surface_name(surface.name) or nil
+        local vehicle_sprite = "neural-connection-sprite"
+        if vehicle_entity and vehicle_entity.valid then
+            vehicle_sprite = "entity/" .. vehicle_entity.name
+        elseif connection.vehicle_type == "car" or connection.vehicle_type == "Car" then
+            vehicle_sprite = "entity/car"
+        elseif connection.vehicle_type == "spider-vehicle"
+            or connection.vehicle_type == "spidertron"
+            or connection.vehicle_type == "Spidertron" then
+            vehicle_sprite = "entity/spidertron"
+        end
+
+        local row_caption = build_neural_row_caption(
+            vehicle_entity and vehicle_entity.valid
+                and get_entity_display_caption(vehicle_entity)
+                or {"vcc.neural-orphaned-engineer"},
+            surface_info
+        )
+        local buttons = build_neural_connection_buttons(vehicle, connection.engineer_unit_number, "orphaned")
+
+        add_neural_connection_row(
+            scroll,
+            "neural_orphaned_" .. index,
+            vehicle_sprite,
+            row_caption,
+            buttons
+        )
+    end
+
+    if not has_rows then
+        scroll.add{type = "label", caption = {"vcc.neural-no-connections"}}
+    end
+
+    main_content.add{type = "line", direction = "horizontal"}
+end
+
 -- Create or update the control center GUI
 function control_center.create_gui(player, vehicle_type)
     vehicle_type = vehicle_type or "all"
+    if vehicle_type == NEURAL_CONNECTIONS_TAB and not neural_mod_available() then
+        vehicle_type = "spider-vehicle"
+    end
+    local is_neural_tab = vehicle_type == NEURAL_CONNECTIONS_TAB
 
     storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
     local player_data = storage.vcc.players[player.index]
@@ -1038,6 +1250,33 @@ function control_center.create_gui(player, vehicle_type)
     spider_tab.enabled = vehicle_type ~= "spider-vehicle"
     car_tab.enabled = vehicle_type ~= "car"
     locomotive_tab.enabled = vehicle_type ~= "locomotive"
+
+    if neural_mod_available() then
+        local neural_tab = vehicle_selector_flow.add{
+            type = "sprite-button",
+            name = "tab_neural_connections",
+            sprite = "neural-connection-sprite",
+            tooltip = {"vcc.filter-neural-connections"},
+            tags = {action = "select_tab", vehicle_type = NEURAL_CONNECTIONS_TAB}
+        }
+        neural_tab.style.size = 40
+        neural_tab.enabled = not is_neural_tab
+    end
+
+    if is_neural_tab then
+        main_frame.tags = {
+            vehicle_type = NEURAL_CONNECTIONS_TAB,
+            map_view_open = false,
+            vehicle_filters = {}
+        }
+
+        build_neural_connections_content(main_content, player)
+
+        storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
+        storage.vcc.players[player.index].gui_open = true
+        storage.vcc.players[player.index].vehicle_type = NEURAL_CONNECTIONS_TAB
+        return main_frame
+    end
 
     if space_age_installed or #game.surfaces > 1 then
         local surface_selector_flow = main_content.add{
@@ -1557,6 +1796,11 @@ function control_center.open_gui(player)
         last_type = storage.vcc.last_vehicle_type[player.index]
     else
         -- Default to spidertron for first open
+        last_type = "spider-vehicle"
+        storage.vcc.last_vehicle_type[player.index] = last_type
+    end
+
+    if last_type == NEURAL_CONNECTIONS_TAB and not neural_mod_available() then
         last_type = "spider-vehicle"
         storage.vcc.last_vehicle_type[player.index] = last_type
     end

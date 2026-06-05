@@ -978,6 +978,38 @@ script.on_event(defines.events.on_gui_click, function(event)
             local surface_index = element.tags.surface_index
             control_center.follow_vehicle_in_map(player, unit_number, surface_index)
             return
+        elseif action == "neural_disconnect" then
+            local unit_number = element.tags.unit_number
+            local surface_index = element.tags.surface_index
+            if remote.interfaces["neural-spider-control"]
+                and remote.interfaces["neural-spider-control"]["vcc_click_neural_disconnect"] then
+                remote.call("neural-spider-control", "vcc_click_neural_disconnect", {
+                    player_index = player.index,
+                    button_tags = {
+                        unit_number = unit_number,
+                        surface_index = surface_index
+                    }
+                })
+            end
+            if player.gui.screen.vehicle_control_center then
+                control_center.create_gui(player, "neural-connections")
+            end
+            return
+        elseif action == "neural_open_engineer" then
+            local engineer_unit_number = element.tags.engineer_unit_number
+            if remote.interfaces["neural-spider-control"]
+                and remote.interfaces["neural-spider-control"]["vcc_click_orphaned_engineer"] then
+                remote.call("neural-spider-control", "vcc_click_orphaned_engineer", {
+                    player_index = player.index,
+                    button_tags = {engineer_unit_number = engineer_unit_number}
+                })
+            end
+            return
+        elseif action == "neural_reconnect" then
+            local unit_number = element.tags.unit_number
+            local surface_index = element.tags.surface_index
+            control_center.connect_to_vehicle(player, unit_number, surface_index)
+            return
         elseif action == "toggle_train_mode" then
             local unit_number = element.tags.unit_number
             local surface_index = element.tags.surface_index
