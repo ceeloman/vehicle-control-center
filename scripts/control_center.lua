@@ -9,6 +9,28 @@ local function log_debug(message)
     log("[Vehicle Control Center] " .. message)
 end
 
+local function default_gui_location(player)
+    return {
+        x = 50,
+        y = math.floor(player.display_resolution.height / 2) - 150
+    }
+end
+
+local function save_gui_location(player)
+    if not player or not player.valid then return end
+    local frame = player.gui.screen.vehicle_control_center
+    if frame and frame.valid then
+        storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
+        storage.vcc.players[player.index].gui_location = frame.location
+    end
+end
+
+function control_center.remember_gui_location(player, location)
+    if not player or not player.valid or not location then return end
+    storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
+    storage.vcc.players[player.index].gui_location = location
+end
+
 local function debug_vehicle_filters(player)
     local main_frame = player.gui.screen.vehicle_control_center
     if not main_frame or not main_frame.tags or not main_frame.tags.vehicle_filters then
@@ -907,8 +929,12 @@ end
 -- Create or update the control center GUI
 function control_center.create_gui(player, vehicle_type)
     vehicle_type = vehicle_type or "all"
-    
-    if player.gui.screen.vehicle_control_center then 
+
+    storage.vcc.players[player.index] = storage.vcc.players[player.index] or {}
+    local player_data = storage.vcc.players[player.index]
+    save_gui_location(player)
+
+    if player.gui.screen.vehicle_control_center then
         player.gui.screen.vehicle_control_center.destroy()
     end
     
@@ -922,10 +948,7 @@ function control_center.create_gui(player, vehicle_type)
     player.opened = main_frame
     
     main_frame.auto_center = false
-    main_frame.location = {
-        x = 50, 
-        y = math.floor(player.display_resolution.height / 2) - 150
-    }
+    main_frame.location = player_data.gui_location or default_gui_location(player)
     
     local title_flow = main_frame.add{
         type = "flow",
@@ -1289,38 +1312,8 @@ function control_center.update_vehicle_type_display(player, vehicle_type)
     -- Store the last used vehicle type
     storage.vcc.last_vehicle_type = storage.vcc.last_vehicle_type or {}
     storage.vcc.last_vehicle_type[player.index] = vehicle_type
-    
-    -- Close the existing GUI if it's open
-    if player.gui.screen.vehicle_control_center then
-        player.gui.screen.vehicle_control_center.destroy()
-    end
-    
-    -- Get the current main frame
-    local main_frame = player.gui.screen.vehicle_control_center
-    if not main_frame or not main_frame.valid then
-        -- If the frame doesn't exist, create it
-        control_center.create_gui(player, vehicle_type)
-        return
-    end
-    
-    -- Update the frame's vehicle type
-    main_frame.tags.vehicle_type = vehicle_type
-    
-    -- Update tab button states
-    local vehicle_selector_flow = main_frame.main_content.vehicle_selector_flow
-    if vehicle_selector_flow then
-        for _, child in pairs(vehicle_selector_flow.children) do
-            if child.type == "sprite-button" and child.tags and child.tags.action == "select_tab" then
-                child.enabled = child.tags.vehicle_type ~= vehicle_type
-            end
-        end
-    end
-    
-    -- Get current surface index
-    local surface_index = main_frame.tags.current_surface_index or player.surface.index
-    
-    -- Update the surface display with the new vehicle type
-    control_center.update_surface_display(player, surface_index)
+
+    control_center.create_gui(player, vehicle_type)
 end
 
 -- Create surface selector dropdown

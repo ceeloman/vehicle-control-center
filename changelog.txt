@@ -11,6 +11,7 @@ Date: 2026-05-13
     - "Get spidertron remote" prefers an empty cursor, can use a free inventory slot and swap onto the cursor when needed, and links using remote selection when the game supports it.
     - "Call spidertron here" falls back to your physical position when you're in map or remote mode, and won't send the spidertron to another surface by mistake.
     - Follow-on-map uses the mod’s map icon instead of a removed vanilla sprite.
+    - Add GUI location persistence for vehicle control center. Implement functionality to remember and restore GUI position for players, enhancing user experience and interface consistency.
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.0
 Date: 2025-05-10

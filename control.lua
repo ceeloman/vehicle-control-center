@@ -1050,6 +1050,17 @@ script.on_event(defines.events.on_gui_opened, function(event)
     refresh_context_toolbars_for_player(player)
 end)
 
+script.on_event(defines.events.on_gui_location_changed, function(event)
+    local element = event.element
+    if not element or not element.valid or element.name ~= "vehicle_control_center" then
+        return
+    end
+    local player = game.get_player(event.player_index)
+    if player and player.valid and control_center.remember_gui_location then
+        control_center.remember_gui_location(player, element.location)
+    end
+end)
+
 -- Handle GUI close events
 script.on_event(defines.events.on_gui_closed, function(event)
     local player = game.get_player(event.player_index)
