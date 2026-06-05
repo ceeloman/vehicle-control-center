@@ -1192,8 +1192,10 @@ script.on_event(defines.events.on_player_left_game, function(event)
     
     if not player_data then return end
     
-    if player_data.locator_id and rendering.is_valid(player_data.locator_id) then
-        rendering.clear(player_data.locator_id)
+    if player_data.locator_id then
+        if player_data.locator_id.valid then
+            player_data.locator_id.destroy()
+        end
         player_data.locator_id = nil
     end
     

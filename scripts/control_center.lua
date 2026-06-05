@@ -217,7 +217,9 @@ function control_center.create_locator_arrow(player, vehicle_unit_number, surfac
     local player_data = storage.vcc.players[player.index] or {}
     storage.vcc.players[player.index] = player_data
     if player_data.locator_id then
-        rendering.destroy(player_data.locator_id)
+        if player_data.locator_id.valid then
+            player_data.locator_id.destroy()
+        end
         player_data.locator_id = nil
         player_data.locator_vehicle_id = nil
     end
