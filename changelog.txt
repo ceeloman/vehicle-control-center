@@ -3,6 +3,8 @@ Version: 0.4.0
 Date: 2026-06-6
   Changes:
     - When driving a vehicle, spiderbots use both the vehicle and engineer inventories. Items are taken from the vehicle first, then the engineer. Picked-up items go to the engineer first, then overflow into the vehicle.
+    - Spiderbots now assign the nearest eligible job to each spider instead of choosing randomly. Spiders closest to the player are prioritized when competing for work. (could be optimised)
+
 
 ---------------------------------------------------------------------------------------------------
 Version: 0.3.1
