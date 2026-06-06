@@ -1,0 +1,142 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.3.1
+Date: 2025-06-18
+  Changes:
+    - Tile tasks may be abandoned if the player moves too far away
+  Bugfixes:
+    - Fixed error when relinking spiderbots to a player when spiderbots were assigned to tile tasks
+---------------------------------------------------------------------------------------------------
+Version: 0.3.0
+Date: 2025-06-18
+  Features:
+    - Added ability to build and mine tiles
+  Changes:
+    - Spiderbots are no longer allowed to be included in blueprints
+  Bugfixes:
+    - Fixed error when inserting modules into entities that were marked for upgrade to an entity with more module slots than the current entity. Spiderbots will now wait until the entity is upgraded before inserting modules.
+    - Fixed that entity ghosts and upgrades with qualities other than "normal" would be built from normal quality items
+  Locale:
+    - Updated Russian (ru) locale from Crowdin
+    - Updated Ukrainian (uk) locale from Crowdin
+---------------------------------------------------------------------------------------------------
+Version: 0.2.8
+Date: 2025-05-17
+  Changes:
+    - Removed photoshop files from distribution
+    - Added console message alert for missing projectiles instead of causing a non-recoverable error
+    - Added hidden optional dependency on Tiny Machines, Micro Machines, and Tiny Assemblers mods to ensure that their data-final-fixes items can be turned into projectiles
+  Bugfixes:
+    - Fixed error when items are thrown while the player is viewing a different surface
+  Locale:
+    - Updated Russian (ru) locale from Crowdin
+    - Updated Ukrainian (uk) locale from Crowdin
+---------------------------------------------------------------------------------------------------
+Version: 0.2.7
+Date: 2025-04-24
+  Changes:
+    - Removed spiderbot collision with ghost tiles
+    - Improved spiderbot pathfinding around large objects and ghosts
+    - Removed unused graphics files
+---------------------------------------------------------------------------------------------------
+Version: 0.2.6
+Date: 2025-04-22
+  Changes:
+    - Changed item projectiles to be placeable off grid
+    - Moved item projectile and build/move sound prototype creation from data-updates to data-final-fixes to increase compatibility with other mods
+  Bugfixes:
+    - Fixed error loading mods due to wrong sprite size definition when other mods defined non-square item icons
+    - Fixed improper sprite scaling for projectiles with layered item icons
+    - Fixed the little spiderbot in the mod description not displaying correctly when the mod is not enabled
+    - Added hidden optional dependency on Maraxsis to ensure that its data-final-fixes items can be turned into projectiles too
+  Locale:
+    - Updated Russian (ru) locale from Crowdin
+    - Updated Ukrainian (uk) locale from Crowdin
+---------------------------------------------------------------------------------------------------
+Version: 0.2.5
+Date: 2025-04-18
+  Features:
+    - Added technology to unlock spiderbot recipe
+    - Added technology to increase spiderbot follower count
+    - Spiderbots throw items back and forth with the player while building and deconstructing
+  Changes:
+    - Stuck spiderbots jump in the direction they're facing instead of picking a random position
+  Bugfixes:
+    - Fixed that spiderbots could be assigned to deconstruct entities that contained items that would not fit in the player inventory
+    - Hid spiderbot projectiles from Factoriopedia
+    - Fixed that spiderbots could get stuck in the walls of factorissimo buildings
+---------------------------------------------------------------------------------------------------
+Version: 0.2.4
+Date: 18NOV2024
+  Changes:
+    - Added inventory move sounds when spiderbots insert or remove items from entity inventories
+    - Added mining and mined sounds when spiderbots deconstruct entities
+    - Added support for per-prototype build, mining, mined, and inventory move sounds
+    - Spiderbots can free themselves when trapped by buildings or ghosts
+  Bugfixes:
+    - Fixed that upgraded entity results would not return to the character inventory when in remote view
+    - Fixed that spiderbots would sometimes refuse to remove modules from entities
+    - Fixed that thrown spiderbots did not have consistent speeds
+---------------------------------------------------------------------------------------------------
+Version: 0.2.3
+Date: 05NOV2024
+  Changes:
+    - Spiderbots can now be deployed, recalled, and perform tasks while the player is in remote view
+    - Improved performance when interacting with inventories
+    - Added build sound when spiderbots upgrade entities
+  Bugfixes:
+    - Fixed error when spamming the toggle shortcut (accessing invalid entity)
+    - Fixed error when drawing the visualization rendering while in remote view
+    - Fixed that spiderbots could be assigned upgrade tasks for a quality entity when only the normal version was in inventory
+---------------------------------------------------------------------------------------------------
+Version: 0.2.2
+Date: 03NOV2024
+  Bugfixes:
+    - Fixed that spiderbots could spawn when throwing grenades or eating fish
+---------------------------------------------------------------------------------------------------
+Version: 0.2.1
+Date: 03NOV2024
+  Changes:
+    - Added support for Factorio 2.0 and the Space Age explansions
+    - Overhauled the task management system to improve reliability and performance (again)
+    - Spiderbots launch themselves towards non-colliding positions instead of teleporting when stuck or left behind
+    - Significantly improved spiderbot pathfinding
+    - Added "smart" cliff destruction to reduce overuse of cliff explosives
+    - Added build sound when spiderbots construct entities
+    - Removed migration message
+  Bugfixes:
+    - Fixed that spiderbots could briefly teleport to the previous surface when following a player who changed surfaces
+  Locale:
+    - Updated mod description
+    - Updated Spiderbot entity and item descriptions
+---------------------------------------------------------------------------------------------------
+Version: 0.2.0
+Date: 21OCT2024
+  Changes:
+    - Overhauled the task management system to improve reliability and performance
+    - Spiderbots are now created by throwing them at the ground
+    - Increased throwing range from 25 to 50 tiles
+    - Spiderbot legs now collide with ghosts
+    - Spiderbots can teleport to the player when they are too far away or stuck
+    - Spiderbots can follow the player when changing surfaces
+    - Spiderbots prioritize using vehicle inventories if the player is in a vehicle
+    - Toggling Spiderbots off recalls the spiderbots to the player inventory
+    - Added migration to update existing spiderbots to the new versions
+  Locale:
+    - Updated mod description
+    - Updated Spiderbot entity and item descriptions
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 26NOV2023
+  Changes:
+    - Initial release on the mod portal
+  Features:
+    - Added "Spiderbot", a small spidertron that can be built in the early game with basic construction abilities
+    - Spiderbots follow the player who built them, and re-follow players when they and return to a surface
+    - Spiderbots process work orders near the player. Deconstruction tasks are prioritized, then construction tasks, then upgrade tasks
+    - Spiderbots cannot mine or place tiles and landfill
+    - Spiderbots cannot repair entities using repair packs
+    - Work order processing can be toggled with a shortcut and hotkey (default: Alt + S)
+    - Spiderbots try to find new paths if they get stuck on the way to a work order or player
+    - Each spider is given a Backer Name when built
+    - Spiderbots change color based on their task type; red for deconstruction, blue for construction, green for upgrade, white for pathfinding, and their player's color when idle
+    - Added debug mode to draw work order paths; /spiderbot-debug
