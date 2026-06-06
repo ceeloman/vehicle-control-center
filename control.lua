@@ -467,6 +467,18 @@ local function inventory_has_space(inventory, item)
     return inventory.can_insert(item) and true or false
 end
 
+---@param item ItemIDAndQualityIDPair|LuaItemStack
+---@return ItemStackDefinition
+local function get_item_stack_definition(item)
+    local item_name = type(item.name) == "string" and item.name or item.name.name --[[@as string]]
+    local quality_name = type(item.quality) == "string" and item.quality or item.quality and item.quality.name or "normal" --[[@as string]]
+    local item_stack = { name = item_name, quality = quality_name }
+    if item.count then
+        item_stack.count = item.count
+    end
+    return item_stack
+end
+
 ---@param entity LuaEntity
 ---@return LuaInventory?
 local function get_entity_inventory(entity)
@@ -480,6 +492,130 @@ local function get_entity_inventory(entity)
     elseif entity_type == "cargo-wagon" then
         return entity.get_inventory(defines.inventory.cargo_wagon)
     end
+end
+
+---@param player LuaPlayer
+---@return LuaInventory?
+local function get_character_inventory(player)
+    local character = player.character
+    if character and character.valid then
+        return character.get_inventory(defines.inventory.character_main)
+    end
+end
+
+---@param player LuaPlayer
+---@return LuaInventory?
+local function get_vehicle_inventory(player)
+    local vehicle = player.physical_vehicle
+    if vehicle and vehicle.valid then
+        return get_entity_inventory(vehicle)
+    end
+end
+
+---@param player LuaPlayer
+---@return LuaInventory[] vehicle first, then character — for taking items
+local function get_source_inventories(player)
+    local inventories = {}
+    local vehicle_inventory = get_vehicle_inventory(player)
+    if vehicle_inventory and vehicle_inventory.valid then
+        table.insert(inventories, vehicle_inventory)
+    end
+    local character_inventory = get_character_inventory(player)
+    if character_inventory and character_inventory.valid then
+        table.insert(inventories, character_inventory)
+    end
+    return inventories
+end
+
+---@param player LuaPlayer
+---@return LuaInventory[] character first, then vehicle — for receiving items
+local function get_pickup_inventories(player)
+    local inventories = {}
+    local character_inventory = get_character_inventory(player)
+    if character_inventory and character_inventory.valid then
+        table.insert(inventories, character_inventory)
+    end
+    local vehicle_inventory = get_vehicle_inventory(player)
+    if vehicle_inventory and vehicle_inventory.valid then
+        table.insert(inventories, vehicle_inventory)
+    end
+    return inventories
+end
+
+---@param inventories LuaInventory[]
+---@return boolean
+local function has_any_valid_inventory(inventories)
+    for _, inventory in ipairs(inventories) do
+        if inventory and inventory.valid then
+            return true
+        end
+    end
+    return false
+end
+
+---@param inventories LuaInventory[]
+---@param item ItemIDAndQualityIDPair|LuaItemStack|string
+---@return boolean
+local function inventories_have_item(inventories, item)
+    for _, inventory in ipairs(inventories) do
+        if inventory.valid and inventory_has_item(inventory, item) then
+            return true
+        end
+    end
+    return false
+end
+
+---@param inventories LuaInventory[]
+---@param item ItemStackDefinition|LuaItemStack|string
+---@return boolean
+local function inventories_can_fit(inventories, item)
+    local item_stack = type(item) == "table" and get_item_stack_definition(item) or { name = item, count = 1 }
+    local remaining = item_stack.count or 1
+    for _, inventory in ipairs(inventories) do
+        if inventory.valid and remaining > 0 then
+            local stack = { name = item_stack.name, count = remaining, quality = item_stack.quality }
+            local inserted = inventory.insert(stack)
+            if inserted > 0 then
+                inventory.remove({ name = item_stack.name, count = inserted, quality = item_stack.quality })
+                remaining = remaining - inserted
+            end
+        end
+    end
+    return remaining <= 0
+end
+
+---@param inventories LuaInventory[]
+---@param item ItemStackDefinition|LuaItemStack
+---@return integer
+local function remove_from_inventories(inventories, item)
+    local item_stack = get_item_stack_definition(item)
+    local remaining = item_stack.count or 1
+    for _, inventory in ipairs(inventories) do
+        if inventory.valid and remaining > 0 then
+            local available = inventory.get_item_count(item_stack)
+            local to_remove = math.min(available, remaining)
+            if to_remove > 0 then
+                inventory.remove({ name = item_stack.name, count = to_remove, quality = item_stack.quality })
+                remaining = remaining - to_remove
+            end
+        end
+    end
+    return (item_stack.count or 1) - remaining
+end
+
+---@param inventories LuaInventory[]
+---@param item ItemStackDefinition|LuaItemStack
+---@return integer
+local function insert_into_inventories(inventories, item)
+    local item_stack = get_item_stack_definition(item)
+    local remaining = item_stack.count or 1
+    for _, inventory in ipairs(inventories) do
+        if inventory.valid and remaining > 0 then
+            local inserted = inventory.insert({ name = item_stack.name, count = remaining, quality = item_stack.quality })
+            remaining = remaining - inserted
+        end
+    end
+    return (item_stack.count or 1) - remaining
 end
 
 ---@param spiderbot LuaEntity
@@ -563,15 +699,6 @@ local function create_item_projectile(origin, destination, item, player, speed_m
     end
 end
 
----@param item ItemIDAndQualityIDPair|LuaItemStack
----@return ItemStackDefinition
-local function get_item_stack_definition(item)
-    local item_name = type(item.name) == "string" and item.name or item.name.name --[[@as string]]
-    local quality_name = type(item.quality) == "string" and item.quality or item.quality and item.quality.name or "normal" --[[@as string]]
-    local item_stack = { name = item_name, quality = quality_name }
-    return item_stack
-end
-
 ---@param spiderbot_data spiderbot_data
 local function build_ghost(spiderbot_data)
     local spiderbot_id = spiderbot_data.spiderbot_id
@@ -585,11 +712,11 @@ local function build_ghost(spiderbot_data)
             local item_quality_pair = { name = item_stack.name, quality = entity.quality }
             local player_entity = get_player_entity(player)
             if player_entity and player_entity.valid then
-                local inventory = get_entity_inventory(player_entity)
-                if inventory and inventory.valid and inventory_has_item(inventory, item_quality_pair) then
+                local source_inventories = get_source_inventories(player)
+                if inventories_have_item(source_inventories, item_quality_pair) then
                     local dictionary, revived_entity, request_proxy = entity.revive({ return_item_request_proxy = false, raise_revive = true })
                     if revived_entity then
-                        inventory.remove { name = item_stack.name, count = item_stack.count, quality = item_quality_pair.quality }
+                        remove_from_inventories(source_inventories, { name = item_stack.name, count = item_stack.count, quality = item_quality_pair.quality })
                         local spiderbot = spiderbot_data.spiderbot
                         create_item_projectile(player_entity, spiderbot, item_stack.name, player)
                         free_stuck_spiderbots(revived_entity)
@@ -614,6 +741,20 @@ local function inventory_has_cliff_explosives(inventory)
         end
     end
     return false, nil
+end
+
+---@param inventories LuaInventory[]
+---@return boolean, LuaQualityPrototype?, LuaInventory?
+local function inventories_have_cliff_explosives(inventories)
+    for _, inventory in ipairs(inventories) do
+        if inventory.valid then
+            local has_cliff_explosives, quality = inventory_has_cliff_explosives(inventory)
+            if has_cliff_explosives then
+                return true, quality, inventory
+            end
+        end
+    end
+    return false, nil, nil
 end
 
 ---@param spiderbot_data spiderbot_data
@@ -745,10 +886,10 @@ local function deconstruct_entity(spiderbot_data)
                 local mining_result = get_result_when_mined(entity)
                 local player_entity = get_player_entity(player)
                 if player_entity and player_entity.valid then
-                    local inventory = get_entity_inventory(player_entity)
-                    if inventory and inventory.valid then
+                    local pickup_inventories = get_pickup_inventories(player)
+                    if has_any_valid_inventory(pickup_inventories) then
                         local entity_position = entity.position
-                        if mining_result and inventory_has_space(inventory, mining_result) then
+                        if mining_result and inventories_can_fit(pickup_inventories, mining_result) then
                             local count = 0
                             local size = get_entity_size_category(entity)
                             local entity_name = entity.name
@@ -756,18 +897,23 @@ local function deconstruct_entity(spiderbot_data)
                             local mining_result_name = mining_result.name
                             local entity_inventory_contents = get_inventory_contents(entity)
                             while entity.valid do
-                                if inventory.can_insert(mining_result) then
-                                    local result = entity.mine {
-                                        inventory = inventory,
-                                        force = false,
-                                        ignore_minable = false,
-                                        raise_destroyed = true
-                                    }
-                                    count = count + 1
-                                    if not result then break end
-                                else
-                                    break
+                                local mined = false
+                                for _, inventory in ipairs(pickup_inventories) do
+                                    if inventory.valid and inventory.can_insert(mining_result) then
+                                        local result = entity.mine {
+                                            inventory = inventory,
+                                            force = false,
+                                            ignore_minable = false,
+                                            raise_destroyed = true
+                                        }
+                                        if result then
+                                            mined = true
+                                            break
+                                        end
+                                    end
                                 end
+                                if not mined then break end
+                                count = count + 1
                                 if count > 4 then break end
                                 create_item_projectile(spiderbot, player_entity, mining_result_name, player)
                                 for item_name, item_count in pairs(entity_inventory_contents) do
@@ -795,8 +941,9 @@ local function deconstruct_entity(spiderbot_data)
                                 }
                             end
                         elseif entity.type == "cliff" then
-                            local has_cliff_explosives, quality = inventory_has_cliff_explosives(inventory)
-                            if has_cliff_explosives then
+                            local source_inventories = get_source_inventories(player)
+                            local has_cliff_explosives, quality, cliff_inventory = inventories_have_cliff_explosives(source_inventories)
+                            if has_cliff_explosives and cliff_inventory then
                                 spiderbot.surface.create_entity {
                                     name = "cliff-explosives",
                                     quality = quality,
@@ -806,7 +953,7 @@ local function deconstruct_entity(spiderbot_data)
                                     raise_built = true,
                                     speed = 0.0125,
                                 }
-                                inventory.remove({ name = "cliff-explosives", count = 1, quality = quality })
+                                cliff_inventory.remove({ name = "cliff-explosives", count = 1, quality = quality })
                                 create_item_projectile(player_entity, spiderbot, "cliff-explosives", player)
                             end
                         end
@@ -830,14 +977,15 @@ local function upgrade_entity(spiderbot_data)
     if player and player.valid and entity and entity.valid and entity.to_be_upgraded() then
         local player_entity = get_player_entity(player)
         if player_entity and player_entity.valid then
-            local inventory = get_entity_inventory(player_entity)
-            if inventory and inventory.valid then
+            local source_inventories = get_source_inventories(player)
+            local pickup_inventories = get_pickup_inventories(player)
+            if has_any_valid_inventory(source_inventories) then
                 local entity_prototype, quality_prototype = entity.get_upgrade_target()
                 local items = entity_prototype and entity_prototype.items_to_place_this
                 local item_stack = items and items[1]
                 if entity_prototype and item_stack then
                     local item_with_quality = { name = item_stack.name, quality = quality_prototype }
-                    if inventory_has_item(inventory, item_with_quality) then
+                    if inventories_have_item(source_inventories, item_with_quality) then
                         local upgrade_name = entity_prototype.name
                         local type = entity.type
                         local is_underground_belt = (type == "underground-belt")
@@ -859,9 +1007,9 @@ local function upgrade_entity(spiderbot_data)
                             raise_built = true,
                         }
                         if upgraded_entity then
-                            inventory.remove { name = item_stack.name, count = item_stack.count, quality = quality_prototype }
+                            remove_from_inventories(source_inventories, { name = item_stack.name, count = item_stack.count, quality = quality_prototype })
                             if (player.controller_type ~= defines.controllers.character) and result_item then
-                                inventory.insert(result_item)
+                                insert_into_inventories(pickup_inventories, result_item)
                             end
                             local spiderbot = spiderbot_data.spiderbot
                             create_item_projectile(player_entity, spiderbot, item_with_quality.name, player)
@@ -892,14 +1040,15 @@ local function insert_items(spiderbot_data)
         local player_entity = get_player_entity(player)
         local target_entity = proxy.proxy_target
         if player_entity and player_entity.valid and target_entity and target_entity.valid then
-            local player_inventory = get_entity_inventory(player_entity)
-            if player_inventory and player_inventory.valid then
+            local source_inventories = get_source_inventories(player)
+            local pickup_inventories = get_pickup_inventories(player)
+            if has_any_valid_inventory(pickup_inventories) and has_any_valid_inventory(source_inventories) then
                 local insert_plan = proxy.insert_plan
                 local removal_plan = proxy.removal_plan
                 if removal_plan and removal_plan[1] then
                     for index, item_to_remove in pairs(removal_plan) do
                         local item_stack = get_item_stack_definition(item_to_remove.id)
-                        if inventory_has_space(player_inventory, item_stack) then
+                        if inventories_can_fit(pickup_inventories, item_stack) then
                             local removal_inventories = item_to_remove.items.in_inventory
                             local removal_data = removal_inventories and removal_inventories[1]
                             local removal_inventory_id = removal_data and removal_data.inventory
@@ -912,7 +1061,7 @@ local function insert_items(spiderbot_data)
                                         stack.clear()
                                     end
                                 end
-                                player_inventory.insert(item_stack)
+                                insert_into_inventories(pickup_inventories, item_stack)
                                 removal_data.count = removal_data.count or 1
                                 removal_data.count = removal_data.count - 1
                                 if removal_inventories and removal_data.count <= 0 then
@@ -938,7 +1087,7 @@ local function insert_items(spiderbot_data)
                 elseif insert_plan and insert_plan[1] then
                     for index, item_to_insert in pairs(insert_plan) do
                         local item_stack = get_item_stack_definition(item_to_insert.id)
-                        if inventory_has_item(player_inventory, item_stack) then
+                        if inventories_have_item(source_inventories, item_stack) then
                             local insert_inventories = item_to_insert.items.in_inventory
                             local insert_data = insert_inventories and insert_inventories[1]
                             local insert_inventory_id = insert_data and insert_data.inventory
@@ -952,7 +1101,7 @@ local function insert_items(spiderbot_data)
                                         stack.set_stack(item_stack)
                                     end
                                 end
-                                player_inventory.remove(item_stack)
+                                remove_from_inventories(source_inventories, item_stack)
                                 insert_data.count = insert_data.count or 1
                                 insert_data.count = insert_data.count - 1
                                 if insert_inventories and insert_data.count <= 0 then
@@ -992,20 +1141,24 @@ local function deconstruct_tile(spiderbot_data)
         if tile.to_be_deconstructed() then
             local player_entity = get_player_entity(player)
             if player_entity and player_entity.valid then
-                local inventory = get_entity_inventory(player_entity)
-                if inventory and inventory.valid then
+                local pickup_inventories = get_pickup_inventories(player)
+                if has_any_valid_inventory(pickup_inventories) then
                     local tile_prototype = tile.prototype
                     local mineable_properties = tile_prototype.mineable_properties
                     local products = mineable_properties.products
                     local can_insert = true
                     for _, product in pairs(products) do
-                        if not inventory_has_space(inventory, product) then
+                        if not inventories_can_fit(pickup_inventories, product) then
                             can_insert = false
                             break
                         end
                     end
                     if can_insert then
-                        local success = player_entity.mine_tile(tile)
+                        local mining_entity = player.character
+                        if not (mining_entity and mining_entity.valid) then
+                            mining_entity = player_entity
+                        end
+                        local success = mining_entity.mine_tile(tile)
                         if success then
                             local mined_sound = get_valid_sound_path(tile_prototype.name .. "-mined_sound", "utility/deconstruct_small")
                             tile.surface.play_sound {
@@ -1041,17 +1194,17 @@ local function build_tile(spiderbot_data)
     if player and player.valid and ghost and ghost.valid then
         local player_entity = get_player_entity(player)
         if player_entity and player_entity.valid then
-            local inventory = get_entity_inventory(player_entity)
-            if inventory and inventory.valid then
+            local source_inventories = get_source_inventories(player)
+            if has_any_valid_inventory(source_inventories) then
                 local tile_prototype = ghost and ghost.ghost_prototype
                 local items_to_place_this = tile_prototype and tile_prototype.items_to_place_this
                 if items_to_place_this and items_to_place_this[1] then
                     local item_stack = items_to_place_this[1]
-                    if inventory_has_item(inventory, item_stack) then
+                    if inventories_have_item(source_inventories, item_stack) then
                         storage.tile_built = false
                         ghost.revive({ raise_revive = true })
                         if storage.tile_built then
-                            inventory.remove(item_stack)
+                            remove_from_inventories(source_inventories, item_stack)
                             local spiderbot = spiderbot_data.spiderbot
                             create_item_projectile(player_entity, spiderbot, item_stack.name, player)
                             local build_sound_path = get_valid_sound_path(tile_prototype.name .. "-build_sound", "utility/build_small")
@@ -1266,10 +1419,9 @@ local function return_spiderbot_to_inventory(spiderbot, player)
         speed = math.random(),
         -- raise_built = true,
     }
-    local inventory = get_entity_inventory(player_entity)
-    if inventory and inventory.valid and inventory_has_space(inventory, "spiderbot") then
-        inventory.insert { name = "spiderbot", count = 1 }
-    else
+    local pickup_inventories = get_pickup_inventories(player)
+    local inserted = has_any_valid_inventory(pickup_inventories) and insert_into_inventories(pickup_inventories, { name = "spiderbot", count = 1 }) > 0
+    if not inserted then
         player_entity.surface.spill_item_stack {
             position = spiderbot.position,
             stack = { name = "spiderbot", count = 1 },
@@ -1346,8 +1498,9 @@ local function on_tick(event)
         end
         -- goto next player if player is not in an allowed controller type
         if not allowed_controllers[player.controller_type] then goto next_player end
-        local inventory = get_entity_inventory(player_entity)
-        if not (inventory and inventory.valid) then goto next_player end
+        local source_inventories = get_source_inventories(player)
+        local pickup_inventories = get_pickup_inventories(player)
+        if not (has_any_valid_inventory(source_inventories) or has_any_valid_inventory(pickup_inventories)) then goto next_player end
         -- setup local data
         local player_force = { player.force.name, "neutral" }
         local surface = player_entity.surface
@@ -1437,7 +1590,7 @@ local function on_tick(event)
                 local items_to_place_this = tile_prototype and tile_prototype.items_to_place_this
                 if items_to_place_this and items_to_place_this[1] then
                     local item_stack = items_to_place_this[1]
-                    if inventory_has_item(inventory, item_stack) then
+                    if inventories_have_item(source_inventories, item_stack) then
                         spiderbot_data.task = {
                             task_type = "build_tile",
                             task_id = ghost_id,
@@ -1473,10 +1626,10 @@ local function on_tick(event)
                 if is_task_assigned(entity_id) then goto next_entity end
                 local mining_result = get_result_when_mined(entity)
                 local inventory_contents = get_inventory_contents(entity)
-                local inventory_has_space_for_all_contents = mining_result and inventory_has_space(inventory, mining_result)
+                local inventory_has_space_for_all_contents = mining_result and inventories_can_fit(pickup_inventories, mining_result)
                 for item_name, item_count in pairs(inventory_contents) do
                     local item_stack = { name = item_name, count = item_count }
-                    if not inventory_has_space(inventory, item_stack) then
+                    if not inventories_can_fit(pickup_inventories, item_stack) then
                         inventory_has_space_for_all_contents = false
                         break
                     end
@@ -1497,7 +1650,7 @@ local function on_tick(event)
                     else
                         goto next_spiderbot
                     end
-                elseif (entity.type == "cliff") and inventory_has_cliff_explosives(inventory) then
+                elseif (entity.type == "cliff") and inventories_have_cliff_explosives(source_inventories) then
                     local distance_to_task = get_distance(entity.position, spiderbot.position)
                     if distance_to_task < double_max_task_range then
                         spiderbot_data.task = {
@@ -1538,7 +1691,7 @@ local function on_tick(event)
                 local item_stack = items and items[1]
                 if item_stack then
                     local item_with_quality = { name = item_stack.name, quality = entity.quality }
-                    if inventory_has_item(inventory, item_with_quality) then
+                    if inventories_have_item(source_inventories, item_with_quality) then
                         local distance_to_task = get_distance(entity.position, spiderbot.position)
                         if distance_to_task < double_max_task_range then
                             spiderbot_data.task = {
@@ -1586,7 +1739,7 @@ local function on_tick(event)
                 local item_stack = items and items[1]
                 if upgrade_target and item_stack then
                     local item_with_quality = { name = item_stack.name, quality = quality_prototype }
-                    if inventory_has_item(inventory, item_with_quality) then
+                    if inventories_have_item(source_inventories, item_with_quality) then
                         local distance_to_task = get_distance(entity.position, spiderbot.position)
                         if distance_to_task < double_max_task_range then
                             spiderbot_data.task = {
@@ -1633,7 +1786,7 @@ local function on_tick(event)
                     if not plans then goto next_entity end
                     for index, plan in pairs(plans) do
                         local item_quality_pair = (plan and plan.id) or nil
-                        local has_item_or_space = plan_type == "insert" and inventory_has_item(inventory, item_quality_pair) or plan_type == "remove" and inventory_has_space(inventory, item_quality_pair) or nil
+                        local has_item_or_space = plan_type == "insert" and inventories_have_item(source_inventories, item_quality_pair) or plan_type == "remove" and inventories_can_fit(pickup_inventories, item_quality_pair) or nil
                         if has_item_or_space then
                             local distance_to_task = get_distance(entity.position, spiderbot.position)
                             if distance_to_task < double_max_task_range then
@@ -1678,7 +1831,7 @@ local function on_tick(event)
                     for _, product in pairs(products) do
                         local count = product.amount or product.amount_max or 0
                         local item_stack = { name = product.name, count = count }
-                        if not inventory_has_space(inventory, item_stack) then
+                        if not inventories_can_fit(pickup_inventories, item_stack) then
                             inventory_has_space_for_all_products = false
                             break
                         end
@@ -1723,7 +1876,7 @@ local function on_tick(event)
                 local items_to_place_this = tile_prototype and tile_prototype.items_to_place_this
                 if items_to_place_this and items_to_place_this[1] then
                     local item_stack = items_to_place_this[1]
-                    if inventory_has_item(inventory, item_stack) then
+                    if inventories_have_item(source_inventories, item_stack) then
                         spiderbot_data.task = {
                             task_type = "build_tile",
                             task_id = ghost_id,
@@ -1766,16 +1919,19 @@ local function toggle_spiderbots(event)
         if player and player.valid then
             local entity = get_player_entity(player)
             if entity and entity.valid then
-                local inventory = get_entity_inventory(entity)
-                local count = inventory and inventory.get_item_count("spiderbot") or 0
+                local source_inventories = get_source_inventories(player)
+                local count = 0
+                for _, inventory in ipairs(source_inventories) do
+                    count = count + inventory.get_item_count("spiderbot")
+                end
                 local position = entity.position
-                if inventory and (count > 0) then
+                if count > 0 then
                     local max_followers = storage.spiderbot_follower_count[player.force.name] or 10
                     for i = 1, math.min(count, max_followers) do
                         local destination = get_random_position_in_radius(position, 25)
                         destination = entity.surface.find_non_colliding_position("spiderbot-leg-1", destination, 100, 0.5) or destination
                         create_spiderbot_projectile(position, destination, player)
-                        inventory.remove({ name = "spiderbot", count = 1 })
+                        remove_from_inventories(source_inventories, { name = "spiderbot", count = 1 })
                     end
                 end
             end
