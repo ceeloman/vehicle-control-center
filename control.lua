@@ -1457,7 +1457,8 @@ end
 
 ---@param spiderbot LuaEntity
 ---@param player LuaPlayer
-local function return_spiderbot_to_inventory(spiderbot, player)
+---@param target_inventories LuaInventory[]?
+local function return_spiderbot_to_inventory(spiderbot, player, target_inventories)
     local spiderbot_id = get_entity_uuid(spiderbot)
     local player_index = player.index
     reset_task_data(spiderbot_id, player_index)
@@ -1473,7 +1474,7 @@ local function return_spiderbot_to_inventory(spiderbot, player)
         speed = math.random(),
         -- raise_built = true,
     }
-    local pickup_inventories = get_pickup_inventories(player)
+    local pickup_inventories = target_inventories or get_pickup_inventories(player)
     local inserted = has_any_valid_inventory(pickup_inventories) and insert_into_inventories(pickup_inventories, { name = "spiderbot", count = 1 }) > 0
     if not inserted then
         player_entity.surface.spill_item_stack {
@@ -1513,14 +1514,237 @@ local function random_pairs(tbl)
     end
 end
 
+---@param spiderbots table<uuid, spiderbot_data>
+---@return integer
+local function count_idle_spiderbots(spiderbots)
+    local count = 0
+    for _, spiderbot_data in pairs(spiderbots) do
+        local spiderbot = spiderbot_data.spiderbot
+        if spiderbot and spiderbot.valid and spiderbot_data.status == "idle" then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+---@param player LuaPlayer
+---@param spiderbots table<uuid, spiderbot_data>
+---@param source_inventories LuaInventory[]
+---@return boolean
+local function can_deploy_spiderbot(player, spiderbots, source_inventories)
+    if not inventories_have_item(source_inventories, "spiderbot") then return false end
+    local deployed = 0
+    for _, spiderbot_data in pairs(spiderbots) do
+        local spiderbot = spiderbot_data.spiderbot
+        if spiderbot and spiderbot.valid then
+            deployed = deployed + 1
+        end
+    end
+    local max_followers = storage.spiderbot_follower_count[player.force.name] or 10
+    return deployed < max_followers
+end
+
+---@param from_position MapPosition
+---@param job_position MapPosition
+---@return MapPosition
+local function get_deploy_position_near_job(from_position, job_position)
+    local dx = job_position.x - from_position.x
+    local dy = job_position.y - from_position.y
+    local distance_squared = dx * dx + dy * dy
+    if distance_squared < 0.01 then
+        return get_random_position_in_radius(from_position, 5)
+    end
+    local distance = math.sqrt(distance_squared)
+    -- land near the job, not a fixed distance from the player
+    local deploy_distance = math.max(distance - 2, distance * 0.9)
+    local scale = deploy_distance / distance
+    return { x = from_position.x + dx * scale, y = from_position.y + dy * scale }
+end
+
+---@param surface LuaSurface
+---@param from_position MapPosition
+---@param job_position MapPosition
+---@return MapPosition
+local function find_deploy_position_near_job(surface, from_position, job_position)
+    local destination = surface.find_non_colliding_position("spiderbot-leg-1", job_position, 3.75, 0.5)
+        or surface.find_non_colliding_position("spiderbot-leg-1", job_position, 15, 0.5)
+    if destination then return destination end
+    destination = get_deploy_position_near_job(from_position, job_position)
+    return surface.find_non_colliding_position("spiderbot-leg-1", destination, 15, 0.5) or destination
+end
+
+---@param player LuaPlayer
+---@param player_entity LuaEntity
+---@param job_position MapPosition?
+---@return boolean
+local function deploy_spiderbot_from_inventory(player, player_entity, job_position)
+    local source_inventories = get_source_inventories(player)
+    local spiderbots = storage.spiderbots[player.index] or {}
+    if not can_deploy_spiderbot(player, spiderbots, source_inventories) then return false end
+    local position = player_entity.position
+    local surface = player_entity.surface
+    local destination = job_position and find_deploy_position_near_job(surface, position, job_position)
+        or get_random_position_in_radius(position, 25)
+    if not job_position then
+        destination = surface.find_non_colliding_position("spiderbot-leg-1", destination, 100, 0.5) or destination
+    end
+    create_spiderbot_projectile(position, destination, player)
+    remove_from_inventories(source_inventories, { name = "spiderbot", count = 1 })
+    return true
+end
+
+---@param entity LuaEntity
+---@param pickup_inventories LuaInventory[]
+---@param source_inventories LuaInventory[]
+---@return boolean
+local function is_decon_entity_eligible(entity, pickup_inventories, source_inventories)
+    if not (entity and entity.valid) then return false end
+    if entity.type == "fish" then return false end
+    if is_task_assigned(get_entity_uuid(entity)) then return false end
+    local mining_result = get_result_when_mined(entity)
+    local inventory_contents = get_inventory_contents(entity)
+    local inventory_has_space_for_all_contents = mining_result and inventories_can_fit(pickup_inventories, mining_result)
+    for item_name, item_count in pairs(inventory_contents) do
+        if not inventories_can_fit(pickup_inventories, { name = item_name, count = item_count }) then
+            inventory_has_space_for_all_contents = false
+            break
+        end
+    end
+    if inventory_has_space_for_all_contents then return true end
+    return entity.type == "cliff" and inventories_have_cliff_explosives(source_inventories)
+end
+
+---@param surface LuaSurface
+---@param area BoundingBox
+---@param player_force string[]
+---@param source_inventories LuaInventory[]
+---@param pickup_inventories LuaInventory[]
+---@param from_position MapPosition
+---@return MapPosition?
+local function find_nearest_eligible_work_position(surface, area, player_force, source_inventories, pickup_inventories, from_position)
+    local function nearest_in_category(candidates, get_position, is_eligible)
+        local nearest_position = nil
+        local nearest_distance_squared = math.huge
+        for _, candidate in pairs(candidates) do
+            if is_eligible(candidate) then
+                local candidate_position = get_position(candidate)
+                local distance_squared = get_distance_squared(from_position, candidate_position)
+                if distance_squared < nearest_distance_squared then
+                    nearest_position = candidate_position
+                    nearest_distance_squared = distance_squared
+                end
+            end
+        end
+        return nearest_position
+    end
+
+    local job_position = nearest_in_category(
+        surface.find_entities_filtered { area = area, force = player_force, type = "tile-ghost" },
+        function(tile_ghost) return tile_ghost.position end,
+        function(tile_ghost)
+            return tile_ghost.valid
+                and storage.foundation_tile_names[tile_ghost.ghost_name]
+                and not is_task_assigned(get_entity_uuid(tile_ghost))
+                and (function()
+                    local items_to_place_this = tile_ghost.ghost_prototype and tile_ghost.ghost_prototype.items_to_place_this
+                    local item_stack = items_to_place_this and items_to_place_this[1]
+                    return item_stack and inventories_have_item(source_inventories, item_stack)
+                end)()
+        end
+    )
+    if job_position then return job_position end
+
+    job_position = nearest_in_category(
+        surface.find_entities_filtered { area = area, force = player_force, to_be_deconstructed = true },
+        function(entity) return entity.position end,
+        function(entity) return is_decon_entity_eligible(entity, pickup_inventories, source_inventories) end
+    )
+    if job_position then return job_position end
+
+    job_position = nearest_in_category(
+        surface.find_entities_filtered { area = area, force = player_force, type = "entity-ghost" },
+        function(entity) return entity.position end,
+        function(entity)
+            if not (entity.valid and not is_task_assigned(get_entity_uuid(entity))) then return false end
+            local items = entity.ghost_prototype.items_to_place_this
+            local item_stack = items and items[1]
+            return item_stack and inventories_have_item(source_inventories, { name = item_stack.name, quality = entity.quality })
+        end
+    )
+    if job_position then return job_position end
+
+    job_position = nearest_in_category(
+        surface.find_entities_filtered { area = area, force = player_force, to_be_upgraded = true },
+        function(entity) return entity.position end,
+        function(entity)
+            if not (entity.valid and not is_task_assigned(get_entity_uuid(entity))) then return false end
+            local upgrade_target, quality_prototype = entity.get_upgrade_target()
+            local items = upgrade_target and upgrade_target.items_to_place_this
+            local item_stack = items and items[1]
+            return upgrade_target and item_stack and inventories_have_item(source_inventories, { name = item_stack.name, quality = quality_prototype })
+        end
+    )
+    if job_position then return job_position end
+
+    job_position = nearest_in_category(
+        surface.find_entities_filtered { area = area, force = player_force, type = "item-request-proxy" },
+        function(entity) return entity.position end,
+        function(entity)
+            if not (entity.valid and not is_task_assigned(get_entity_uuid(entity))) then return false end
+            local proxy_target = entity.proxy_target
+            if not (proxy_target and not proxy_target.to_be_upgraded()) then return false end
+            local insert_plan = entity.insert_plan
+            local removal_plan = entity.removal_plan
+            local plan_type = (removal_plan[1] and "remove") or (insert_plan[1] and "insert") or nil
+            local plans = removal_plan[1] and removal_plan or insert_plan[1] and insert_plan or nil
+            if not plans then return false end
+            for _, plan in pairs(plans) do
+                local item_quality_pair = plan and plan.id
+                local has_item_or_space = plan_type == "insert" and inventories_have_item(source_inventories, item_quality_pair)
+                    or plan_type == "remove" and inventories_can_fit(pickup_inventories, item_quality_pair)
+                if has_item_or_space then return true end
+            end
+            return false
+        end
+    )
+    if job_position then return job_position end
+
+    job_position = nearest_in_category(
+        surface.find_tiles_filtered { area = area, force = player_force, to_be_deconstructed = true },
+        function(tile) return tile.position end,
+        function(tile)
+            if not (tile.valid and not is_task_assigned(get_tile_uuid(tile))) then return false end
+            local products = tile.prototype.mineable_properties.products
+            if not products then return false end
+            for _, product in pairs(products) do
+                local count = product.amount or product.amount_max or 0
+                if not inventories_can_fit(pickup_inventories, { name = product.name, count = count }) then
+                    return false
+                end
+            end
+            return true
+        end
+    )
+    if job_position then return job_position end
+
+    return nearest_in_category(
+        surface.find_entities_filtered { area = area, force = player_force, type = "tile-ghost" },
+        function(tile_ghost) return tile_ghost.position end,
+        function(tile_ghost)
+            if not (tile_ghost.valid and not is_task_assigned(get_entity_uuid(tile_ghost))) then return false end
+            local items_to_place_this = tile_ghost.ghost_prototype and tile_ghost.ghost_prototype.items_to_place_this
+            local item_stack = items_to_place_this and items_to_place_this[1]
+            return item_stack and inventories_have_item(source_inventories, item_stack)
+        end
+    )
+end
+
 ---@param event NthTickEventData
 local function on_tick(event)
     for _, player in pairs(game.connected_players) do
         local player_index = player.index
         storage.spiderbots[player_index] = storage.spiderbots[player_index] or {}
         local spiderbots = storage.spiderbots[player_index]
-        -- goto next player if the player has no spiderbots deployed
-        if table_size(spiderbots) == 0 then goto next_player end
         local player_entity = get_player_entity(player)
         -- relink spiderbots if the player changes character
         if not (player_entity and player_entity.valid) then
@@ -1555,7 +1779,6 @@ local function on_tick(event)
         local source_inventories = get_source_inventories(player)
         local pickup_inventories = get_pickup_inventories(player)
         if not (has_any_valid_inventory(source_inventories) or has_any_valid_inventory(pickup_inventories)) then goto next_player end
-        -- setup local data
         local player_force = { player.force.name, "neutral" }
         local surface = player_entity.surface
         local character_position_x = player_entity.position.x
@@ -1564,6 +1787,14 @@ local function on_tick(event)
             { character_position_x - half_max_task_range, character_position_y - half_max_task_range },
             { character_position_x + half_max_task_range, character_position_y + half_max_task_range },
         }
+        local job_position = find_nearest_eligible_work_position(surface, area, player_force, source_inventories, pickup_inventories, player_entity.position)
+        if storage.spiderbots_enabled[player_index]
+            and count_idle_spiderbots(spiderbots) == 0
+            and job_position
+            and can_deploy_spiderbot(player, spiderbots, source_inventories) then
+            deploy_spiderbot_from_inventory(player, player_entity, job_position)
+        end
+        if table_size(spiderbots) == 0 then goto next_player end
         local revive_landfill = nil --[[@type LuaEntity[]?]]
         local decon_entities = nil --[[@type LuaEntity[]?]]
         local revive_entities = nil --[[@type LuaEntity[]?]]
@@ -1933,6 +2164,10 @@ local function on_tick(event)
                 ::next_tile::
             end
             if revive_tiles_ordered then goto next_spiderbot end
+            local character_inventory = get_character_inventory(player)
+            if character_inventory and character_inventory.valid and inventory_has_space(character_inventory, "spiderbot") then
+                return_spiderbot_to_inventory(spiderbot, player, { character_inventory })
+            end
             ::next_spiderbot::
         end
         ::next_player::
@@ -1955,19 +2190,22 @@ local function toggle_spiderbots(event)
             local entity = get_player_entity(player)
             if entity and entity.valid then
                 local source_inventories = get_source_inventories(player)
+                local pickup_inventories = get_pickup_inventories(player)
                 local count = 0
                 for _, inventory in ipairs(source_inventories) do
                     count = count + inventory.get_item_count("spiderbot")
                 end
-                local position = entity.position
-                if count > 0 then
-                    local max_followers = storage.spiderbot_follower_count[player.force.name] or 10
-                    for i = 1, math.min(count, max_followers) do
-                        local destination = get_random_position_in_radius(position, 25)
-                        destination = entity.surface.find_non_colliding_position("spiderbot-leg-1", destination, 100, 0.5) or destination
-                        create_spiderbot_projectile(position, destination, player)
-                        remove_from_inventories(source_inventories, { name = "spiderbot", count = 1 })
-                    end
+                local max_followers = storage.spiderbot_follower_count[player.force.name] or 10
+                local character_position_x = entity.position.x
+                local character_position_y = entity.position.y
+                local area = {
+                    { character_position_x - half_max_task_range, character_position_y - half_max_task_range },
+                    { character_position_x + half_max_task_range, character_position_y + half_max_task_range },
+                }
+                local player_force = { player.force.name, "neutral" }
+                local job_position = find_nearest_eligible_work_position(entity.surface, area, player_force, source_inventories, pickup_inventories, entity.position)
+                for _ = 1, math.min(count, max_followers) do
+                    if not deploy_spiderbot_from_inventory(player, entity, job_position) then break end
                 end
             end
         end

@@ -4,6 +4,9 @@ Date: 2026-06-6
   Changes:
     - When driving a vehicle, spiderbots use both the vehicle and engineer inventories. Items are taken from the vehicle first, then the engineer. Picked-up items go to the engineer first, then overflow into the vehicle.
     - Spiderbots now assign the nearest eligible job to each spider instead of choosing randomly. Spiders closest to the player are prioritized when competing for work. (could be optimised)
+    - Idle spiderbots with no available work return to the engineer inventory when there is space for them
+    - Spiderbots are automatically deployed from inventory when work is available and no idle spiders are deployed
+    - Deployed spiderbots land near the nearest eligible job instead of at a random position nearby
 
 
 ---------------------------------------------------------------------------------------------------
