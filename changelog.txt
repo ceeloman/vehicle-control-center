@@ -9,7 +9,6 @@ Date: 2026-06-6
     - Deployed spiderbots land near the nearest eligible job instead of at a random position nearby
   Bugfixes:
     - Fixed error when deconstructing an entity while riding a vehicle: mined items are no longer routed into that vehicle's own trunk inventory
-    - Added optional deconstruct debug logging to chat (set deconstruct_debug in control.lua)
 
 ---------------------------------------------------------------------------------------------------
 Version: 0.3.1
