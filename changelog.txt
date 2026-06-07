@@ -7,6 +7,7 @@ Date: 2026-06-6
     - Idle spiderbots with no available work return to the engineer inventory when there is space for them
     - Spiderbots are automatically deployed from inventory when work is available and no idle spiders are deployed
     - Deployed spiderbots land near the nearest eligible job instead of at a random position nearby
+    - Spiderbots can repair entities marked for repair using repair packs from the player's inventory. Repair pack durability is consumed at the correct rate for each entity. (Work out repair sounds later)
   Bugfixes:
     - Fixed error when deconstructing an entity while riding a vehicle: mined items are no longer routed into that vehicle's own trunk inventory
     - Fixed that spiderbots could get stuck colliding with tile ghosts

@@ -548,6 +548,15 @@ local function get_entity_inventory(entity)
     end
 end
 
+---@param inventory LuaInventory
+---@param entity LuaEntity
+---@return boolean
+local function inventory_belongs_to_entity(inventory, entity)
+    if not (inventory and inventory.valid and entity and entity.valid) then return false end
+    local entity_inventory = get_entity_inventory(entity)
+    return entity_inventory and entity_inventory.valid and entity_inventory == inventory
+end
+
 ---@param player LuaPlayer
 ---@return LuaInventory?
 local function get_character_inventory(player)
@@ -811,6 +820,49 @@ local function inventories_have_cliff_explosives(inventories)
     return false, nil, nil
 end
 
+---@param entity LuaEntity
+---@return boolean
+local function entity_needs_repair(entity)
+    if not (entity and entity.valid and entity.is_registered_for_repair()) then return false end
+    if entity.has_flag("not-repairable") then return false end
+    local health = entity.health
+    if not health then return false end
+    return health < entity.max_health
+end
+
+---@param inventory LuaInventory
+---@return LuaItemStack?
+local function inventory_find_repair_tool(inventory)
+    if not inventory.valid then return nil end
+    for i = 1, #inventory do
+        local stack = inventory[i]
+        if stack.valid_for_read and stack.is_repair_tool and stack.health > 0 then
+            return stack
+        end
+    end
+    return nil
+end
+
+---@param inventories LuaInventory[]
+---@return boolean
+local function inventories_have_repair_tool(inventories)
+    for _, inventory in ipairs(inventories) do
+        if inventory_find_repair_tool(inventory) then
+            return true
+        end
+    end
+    return false
+end
+
+---@param entity LuaEntity
+---@param repair_stack LuaItemStack
+---@return number
+local function get_repair_health_per_durability(entity, repair_stack)
+    local tool_speed = repair_stack.prototype.speed or 1
+    local repair_modifier = entity.prototype.repair_speed_modifier or 1
+    return tool_speed * repair_modifier
+end
+
 ---@param spiderbot_data spiderbot_data
 local function find_nearby_cliff_to_deconstruct(spiderbot_data)
     local surface = spiderbot_data.spiderbot.surface
@@ -954,8 +1006,7 @@ local function deconstruct_entity(spiderbot_data)
                                 local mined = false
                                 for _, inventory in ipairs(pickup_inventories) do
                                     if inventory.valid and inventory.can_insert(mining_result) then
-                                        local inventory_owner = inventory.owner
-                                        if not (inventory_owner and inventory_owner.valid and inventory_owner == entity) then
+                                        if not inventory_belongs_to_entity(inventory, entity) then
                                             local result = entity.mine {
                                                 inventory = inventory,
                                                 force = false,
@@ -1189,6 +1240,54 @@ local function insert_items(spiderbot_data)
 end
 
 ---@param spiderbot_data spiderbot_data
+local function repair_entity(spiderbot_data)
+    local spiderbot_id = spiderbot_data.spiderbot_id
+    local player = spiderbot_data.player
+    local player_index = spiderbot_data.player_index
+    local entity = spiderbot_data.task.entity
+    if player and player.valid and entity and entity.valid and entity_needs_repair(entity) then
+        local player_entity = get_player_entity(player)
+        if player_entity and player_entity.valid then
+            local source_inventories = get_source_inventories(player)
+            local repair_stack = nil
+            for _, inventory in ipairs(source_inventories) do
+                repair_stack = inventory_find_repair_tool(inventory)
+                if repair_stack then break end
+            end
+            if repair_stack then
+                local health_needed = entity.max_health - entity.health
+                local health_per_durability = get_repair_health_per_durability(entity, repair_stack)
+                local repaired = false
+                if health_per_durability > 0 then
+                    local durability_needed = health_needed / health_per_durability
+                    if repair_stack.prototype.infinite then
+                        entity.health = entity.max_health
+                        repaired = true
+                    else
+                        local available_durability = repair_stack.durability
+                        local durability_to_drain = math.min(durability_needed, available_durability)
+                        if durability_to_drain > 0 then
+                            repair_stack.drain_durability(durability_to_drain)
+                            entity.health = entity.health + durability_to_drain * health_per_durability
+                            repaired = true
+                        end
+                    end
+                end
+                if repaired then
+                    local spiderbot = spiderbot_data.spiderbot
+                    create_item_projectile(player_entity, spiderbot, repair_stack.name, player)
+                    -- entity.surface.play_sound {
+                    --     path = "__core__/sound/manual-repair-advanced-1.ogg",
+                    --     position = entity.position,
+                    -- }
+                end
+            end
+        end
+    end
+    reset_task_data(spiderbot_id, player_index)
+end
+
+---@param spiderbot_data spiderbot_data
 local function deconstruct_tile(spiderbot_data)
     local spiderbot_id = spiderbot_data.spiderbot_id
     local player = spiderbot_data.player
@@ -1259,17 +1358,18 @@ local function build_tile(spiderbot_data)
                     local item_stack = items_to_place_this[1]
                     if inventories_have_item(source_inventories, item_stack) then
                         storage.tile_built = false
-                        free_stuck_spiderbots(ghost)
                         ghost.revive({ raise_revive = true })
                         if storage.tile_built then
                             remove_from_inventories(source_inventories, item_stack)
                             local spiderbot = spiderbot_data.spiderbot
-                            create_item_projectile(player_entity, spiderbot, item_stack.name, player)
-                            local build_sound_path = get_valid_sound_path(tile_prototype.name .. "-build_sound", "utility/build_small")
-                            spiderbot.surface.play_sound {
-                                path = build_sound_path,
-                                position = spiderbot.position,
-                            }
+                            if spiderbot.valid then
+                                create_item_projectile(player_entity, spiderbot, item_stack.name, player)
+                                local build_sound_path = get_valid_sound_path(tile_prototype.name .. "-build_sound", "utility/build_small")
+                                spiderbot.surface.play_sound {
+                                    path = build_sound_path,
+                                    position = spiderbot.position,
+                                }
+                            end
                         end
                         storage.tile_built = nil
                     end
@@ -1292,6 +1392,7 @@ local function complete_task(spiderbot_data)
     elseif type == "insert_items" then
         insert_items(spiderbot_data)
     elseif type == "repair_entity" then
+        repair_entity(spiderbot_data)
     elseif type == "deconstruct_tile" then
         deconstruct_tile(spiderbot_data)
     elseif type == "build_tile" then
@@ -1691,6 +1792,16 @@ local function find_nearest_eligible_work_position(surface, area, player_force, 
     if job_position then return job_position end
 
     job_position = nearest_in_category(
+        surface.find_entities_filtered { area = area, force = player_force },
+        function(entity) return entity.position end,
+        function(entity)
+            if not (entity.valid and not is_task_assigned(get_entity_uuid(entity))) then return false end
+            return entity_needs_repair(entity) and inventories_have_repair_tool(source_inventories)
+        end
+    )
+    if job_position then return job_position end
+
+    job_position = nearest_in_category(
         surface.find_entities_filtered { area = area, force = player_force, type = "item-request-proxy" },
         function(entity) return entity.position end,
         function(entity)
@@ -1803,12 +1914,14 @@ local function on_tick(event)
         local decon_entities = nil --[[@type LuaEntity[]?]]
         local revive_entities = nil --[[@type LuaEntity[]?]]
         local upgrade_entities = nil --[[@type LuaEntity[]?]]
+        local repair_entities = nil --[[@type LuaEntity[]?]]
         local item_proxy_entities = nil --[[@type LuaEntity[]?]]
         local decon_tiles = nil --[[@type LuaTile[]?]]
         local revive_tiles = nil --[[@type LuaEntity[]?]]
         local decon_ordered = false
         local revive_ordered = false
         local upgrade_ordered = false
+        local repair_ordered = false
         local item_proxy_ordered = false
         local decon_tiles_ordered = false
         local revive_tiles_ordered = false
@@ -2041,6 +2154,32 @@ local function on_tick(event)
                 ::next_entity::
             end
             if upgrade_ordered then goto next_spiderbot end
+            repair_entities = repair_entities or surface.find_entities_filtered {
+                area = area,
+                force = player_force,
+            }
+            while (#repair_entities > 0 and spiders_dispatched < max_spiders_dispatched) do
+                local nearest_index = find_nearest_index(repair_entities, spiderbot.position, double_max_task_range_squared, function(entity) return entity.position end)
+                if not nearest_index then break end
+                local entity = table.remove(repair_entities, nearest_index) --[[@type LuaEntity]]
+                if not (entity and entity.valid) then goto next_entity end
+                local entity_id = get_entity_uuid(entity)
+                if is_task_assigned(entity_id) then goto next_entity end
+                if entity_needs_repair(entity) and inventories_have_repair_tool(source_inventories) then
+                    spiderbot_data.task = {
+                        task_type = "repair_entity",
+                        task_id = entity_id,
+                        entity = entity,
+                    }
+                    spiderbot_data.status = "path_requested"
+                    spiderbot_data.path_request_id = request_path(spiderbot, entity)
+                    spiders_dispatched = spiders_dispatched + 1
+                    repair_ordered = true
+                    goto next_spiderbot
+                end
+                ::next_entity::
+            end
+            if repair_ordered then goto next_spiderbot end
             item_proxy_entities = item_proxy_entities or surface.find_entities_filtered {
                 area = area,
                 force = player_force,
