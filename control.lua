@@ -10,6 +10,34 @@ local tile_bounding_box = constants.tile_bounding_box
 local color_util = require("util/colors")
 local color = color_util.color
 
+local deconstruct_debug = true
+
+---@param player LuaPlayer
+---@param message string
+local function deconstruct_debug_print(player, message)
+    if deconstruct_debug and player and player.valid then
+        player.print("[spiderbots deconstruct] " .. message)
+    end
+end
+
+---@param entity LuaEntity?
+---@return string
+local function describe_entity(entity)
+    if not (entity and entity.valid) then return "invalid" end
+    return entity.name .. " type=" .. entity.type .. " unit=" .. tostring(entity.unit_number)
+end
+
+---@param inventory LuaInventory?
+---@return string
+local function describe_inventory_owner(inventory)
+    if not (inventory and inventory.valid) then return "invalid inventory" end
+    local owner = inventory.owner
+    if owner and owner.valid then
+        return describe_entity(owner)
+    end
+    return "no owner"
+end
+
 ---@param player LuaPlayer
 ---@return LuaEntity?
 local function get_player_entity(player)
@@ -944,6 +972,23 @@ local function deconstruct_entity(spiderbot_data)
                     if has_any_valid_inventory(pickup_inventories) then
                         local entity_position = entity.position
                         if mining_result and inventories_can_fit(pickup_inventories, mining_result) then
+                            deconstruct_debug_print(player, "starting mine loop")
+                            deconstruct_debug_print(player, "target entity: " .. describe_entity(entity))
+                            deconstruct_debug_print(player, "spiderbot: " .. describe_entity(spiderbot))
+                            deconstruct_debug_print(player, "player entity: " .. describe_entity(player_entity))
+                            deconstruct_debug_print(player, "target == spiderbot: " .. tostring(entity == spiderbot))
+                            deconstruct_debug_print(player, "target == player entity: " .. tostring(entity == player_entity))
+                            local player_vehicle = player.physical_vehicle
+                            deconstruct_debug_print(player, "player vehicle: " .. describe_entity(player_vehicle))
+                            deconstruct_debug_print(player, "target == player vehicle: " .. tostring(player_vehicle and player_vehicle.valid and entity == player_vehicle))
+                            for pickup_index, pickup_inventory in ipairs(pickup_inventories) do
+                                deconstruct_debug_print(player, "pickup[" .. pickup_index .. "] owner: " .. describe_inventory_owner(pickup_inventory))
+                                local pickup_owner = pickup_inventory.valid and pickup_inventory.owner
+                                if pickup_owner and pickup_owner.valid and pickup_owner == entity then
+                                    deconstruct_debug_print(player, "pickup[" .. pickup_index .. "] WARNING: owned by target entity — mine() will reject this inventory")
+                                end
+                            end
+                            deconstruct_debug_print(player, "mining result: " .. mining_result.name .. " x" .. tostring(mining_result.count or 1))
                             local count = 0
                             local size = get_entity_size_category(entity)
                             local entity_name = entity.name
@@ -952,18 +997,33 @@ local function deconstruct_entity(spiderbot_data)
                             local entity_inventory_contents = get_inventory_contents(entity)
                             while entity.valid do
                                 local mined = false
-                                for _, inventory in ipairs(pickup_inventories) do
+                                for pickup_index, inventory in ipairs(pickup_inventories) do
                                     if inventory.valid and inventory.can_insert(mining_result) then
-                                        local result = entity.mine {
-                                            inventory = inventory,
-                                            force = false,
-                                            ignore_minable = false,
-                                            raise_destroyed = true
-                                        }
-                                        if result then
-                                            mined = true
-                                            break
+                                        local inventory_owner = inventory.owner
+                                        if inventory_owner and inventory_owner.valid and inventory_owner == entity then
+                                            deconstruct_debug_print(player, "skipping pickup[" .. pickup_index .. "]: inventory belongs to entity being mined")
+                                        else
+                                            deconstruct_debug_print(player, "attempting mine into pickup[" .. pickup_index .. "] owner: " .. describe_inventory_owner(inventory))
+                                            local ok, result = pcall(function()
+                                                return entity.mine {
+                                                    inventory = inventory,
+                                                    force = false,
+                                                    ignore_minable = false,
+                                                    raise_destroyed = true
+                                                }
+                                            end)
+                                            if not ok then
+                                                deconstruct_debug_print(player, "mine FAILED pickup[" .. pickup_index .. "]: " .. tostring(result))
+                                            elseif result then
+                                                deconstruct_debug_print(player, "mine succeeded pickup[" .. pickup_index .. "]")
+                                                mined = true
+                                                break
+                                            else
+                                                deconstruct_debug_print(player, "mine returned false pickup[" .. pickup_index .. "]")
+                                            end
                                         end
+                                    else
+                                        deconstruct_debug_print(player, "pickup[" .. pickup_index .. "] skipped: " .. (inventory.valid and "cannot insert " .. mining_result.name or "invalid inventory"))
                                     end
                                 end
                                 if not mined then break end
