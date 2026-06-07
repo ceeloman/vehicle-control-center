@@ -170,3 +170,15 @@ for name, entity_ghost in pairs(data.raw["entity-ghost"]) do
     entity_ghost.collision_mask.layers = entity_ghost.collision_mask.layers or {}
     entity_ghost.collision_mask.layers["spiderbot_leg"] = true
 end
+
+-- spiderbot legs intentionally omit the ghost layer so they can walk through tile ghosts.
+-- entity ghosts still block legs via the spiderbot_leg layer added above.
+for name, tile_ghost in pairs(data.raw["tile-ghost"] or {}) do
+    tile_ghost.collision_mask = { layers = { ghost = true } }
+end
+
+for name, leg in pairs(data.raw["spider-leg"] or {}) do
+    if string.find(name, "spiderbot", 1, true) and leg.collision_mask and leg.collision_mask.layers then
+        leg.collision_mask.layers.ghost = nil
+    end
+end

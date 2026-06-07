@@ -1259,6 +1259,7 @@ local function build_tile(spiderbot_data)
                     local item_stack = items_to_place_this[1]
                     if inventories_have_item(source_inventories, item_stack) then
                         storage.tile_built = false
+                        free_stuck_spiderbots(ghost)
                         ghost.revive({ raise_revive = true })
                         if storage.tile_built then
                             remove_from_inventories(source_inventories, item_stack)
